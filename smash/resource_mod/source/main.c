@@ -225,7 +225,6 @@ void _main(rf_header* header, void *contents)
         blocks[i] = string_section_next + sizeof(u32) + (0x2000*i*sizeof(u8));
     }
     
-    //Set up file extensions
     char **extensions = malloc(*(u32*)extensions_block * sizeof(char*));
     for(int i = 0; i < *(u32*)extensions_block; i++)
     {
@@ -242,7 +241,6 @@ void _main(rf_header* header, void *contents)
     crit_init(crit_this());
     mount_sdmc("sd:");
     
-    //Iterate through sd:/saltysd/smash for every single file
     u32 num_directories = 1;
     u32 num_files = 0;
     void *dir_entries = malloc(0x40*sizeof(DirectoryEntry));
@@ -289,11 +287,11 @@ void _main(rf_header* header, void *contents)
                         dumb_strcat(file, "/");
                     }
                     dumb_wcstombs(file+strlen(file), dir_entry->path);
-                    //printf("List: %s", file);
+                        //printf("List: %s", file);
                     
                     if(i == 0)
                     {
-                        //Check for revoke*.txt files
+                            //Check for revoke*.txt files
                         char *revokenametest = malloc(0x101); memclr(revokenametest, 0x101);
                         memcpy(revokenametest, file, strlen("revoke"));
                         
@@ -307,19 +305,33 @@ void _main(rf_header* header, void *contents)
                             {
                                 u32 revoke_size = IFile_GetSize(ifile_handle);
                                 u32 revoke_read = 0;
-                                void *revoke_temp_buf = malloc(revoke_size+2);
-                                IFile_Read(ifile_handle, revoke_temp_buf, revoke_size, &revoke_read);
-                                IFile_Close(ifile_handle);
-                                
-                                void *new_alloc = malloc(revoke_size+revoke_total_size+2);
+                                char *revoke_temp_buf = malloc(revoke_size+1);
+                                  IFile_Read(ifile_handle, revoke_temp_buf, revoke_size, &revoke_read);
+                                  IFile_Close(ifile_handle);
+ 
+                                    //Terminated at what was read: every reader
+                                    //below walks it as a string.
+                                  if(revoke_read > revoke_size)
+                                      revoke_read = revoke_size;
+                                  revoke_temp_buf[revoke_read] = 0;
+ 
+                                    //Sized and copied by the text already held,
+                                    //plus a separator and this file. The new
+                                    //buffer is a string before anything appends
+                                    //to it.
+                                  u32 revoke_held = revoke_buf ? strlen(revoke_buf) : 0;
+                                char *new_alloc = malloc(revoke_held+1+revoke_read+1);
+                                new_alloc[0] = 0;
                                 if(revoke_buf)
-                                    memcpy(new_alloc, revoke_buf, revoke_size);
+                                {
+                                    dumb_strcpy(new_alloc, revoke_buf);
+                                    free(revoke_buf);
+                                }
                                 revoke_buf = new_alloc;
-                                    
-                                revoke_total_size = revoke_size+revoke_total_size+2;
-                                    
+
                                 dumb_strcat(revoke_buf, "\n");
                                 dumb_strcat(revoke_buf, revoke_temp_buf);
+                                revoke_total_size = strlen(revoke_buf);
                                 free(revoke_temp_buf);
                             }
                             free(temp_real_path);
@@ -363,7 +375,9 @@ void _main(rf_header* header, void *contents)
                 
                 //I don't know how these Windows newlines work, but they're annoying
                 //and I hate them.
-                if(revoke_buf[i-1] == '\r')
+                //The buffer opens with the separator, so index 0 is a newline on
+                //every parse and i-1 is off the front of the allocation.
+                if(i > 0 && revoke_buf[i-1] == '\r')
                 {
                     revoke_buf[i-1] = 0;
                 }
@@ -464,7 +478,7 @@ void _main(rf_header* header, void *contents)
                     
                     if(!existing_revoked)
                     {
-                        //By overriding the compressed size, our files are forced into only one hook
+                    //By overriding the compressed size, our files are forced into only one hook
                         (*entries)[i].comp_size = file_sizes[j];
                         (*entries)[i].decomp_size = file_sizes[j];
                         (*entries)[i].flags |= 0x8000;
@@ -494,7 +508,6 @@ void _main(rf_header* header, void *contents)
                 }
             }
             
-            //Don't add the file if it's revoked
             if(new_revoked)
                 continue;
         }
@@ -605,7 +618,6 @@ void _main(rf_header* header, void *contents)
         //Create all our new folders
         for(int j = 0; j < entries_to_make-1; j++)
         {
-            //Stay within our blocks
             if((last_str_addr & 0x1FFF) + strlen(substr) >= 0x2000)
                 last_str_addr = (last_str_addr + 0x1FFF) & (0xFFFFFFFF - 0x1FFF);
         
@@ -671,7 +683,6 @@ void _main(rf_header* header, void *contents)
         //New extension...
         if(ext_num == 0 && len && *(u32*)extensions_block < 0x3E)
         {
-            //Stay within our blocks
             if((last_str_addr & 0x1FFF) + strlen(substr) >= 0x2000)
                 last_str_addr = (last_str_addr + 0x1FFF) & (0xFFFFFFFF - 0x1FFF);
                 
@@ -689,7 +700,6 @@ void _main(rf_header* header, void *contents)
         
         free(file_ext);
         
-        //Stay within our blocks
         if((last_str_addr & 0x1FFF) + strlen(substr) >= 0x2000)
             last_str_addr = (last_str_addr + 0x1FFF) & (0xFFFFFFFF - 0x1FFF);
         
