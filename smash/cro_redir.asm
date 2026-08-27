@@ -184,12 +184,19 @@ cro_search_loop:
          swi 0x3D
       pop {r0-r1}
 
+      ; A node whose CRO is not loaded has no export table, so the answer for
+      ; it is "not here" rather than a read off address zero.
+      mov r0, #0x0
       ldr r1, [r5, #BUFFER_LOAD_ADDR]
+      cmp r1, #0x0
+      beq cro_search_next
+
       mov r0, r6
       bl cro_find_func
       cmp r0, #0x0
       bne cro_found
-      
+
+cro_search_next:
       ldr r5, [r5, #BUFFER_PNEXT]
       cmp r5, #0x0
       bne cro_search_loop

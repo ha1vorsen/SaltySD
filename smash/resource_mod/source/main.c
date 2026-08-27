@@ -306,14 +306,14 @@ void _main(rf_header* header, void *contents)
                                 u32 revoke_size = IFile_GetSize(ifile_handle);
                                 u32 revoke_read = 0;
                                 char *revoke_temp_buf = malloc(revoke_size+1);
-                                  IFile_Read(ifile_handle, revoke_temp_buf, revoke_size, &revoke_read);
-                                  IFile_Close(ifile_handle);
- 
-                                  if(revoke_read > revoke_size)
-                                      revoke_read = revoke_size;
-                                  revoke_temp_buf[revoke_read] = 0;
- 
-                                  u32 revoke_held = revoke_buf ? strlen(revoke_buf) : 0;
+                                IFile_Read(ifile_handle, revoke_temp_buf, revoke_size, &revoke_read);
+                                IFile_Close(ifile_handle);
+
+                                if(revoke_read > revoke_size)
+                                    revoke_read = revoke_size;
+                                revoke_temp_buf[revoke_read] = 0;
+
+                                u32 revoke_held = revoke_buf ? strlen(revoke_buf) : 0;
                                 char *new_alloc = malloc(revoke_held+1+revoke_read+1);
                                 new_alloc[0] = 0;
                                 if(revoke_buf)
