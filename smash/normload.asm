@@ -8,6 +8,8 @@
 .include "common.asm"
 .equ base_addr,     0xa36800
 
+.equ saltysd_build_prefix,  0xA33004
+
 .equ TO_LOAD, 0x0
 .equ RESOURCE_ID, 0x4
 .equ FILE_SIZE, 0x8
@@ -34,27 +36,29 @@ test:
          str r6, [sp, #TO_LOAD]
          str r4, [sp, #RESOURCE_ID]
          
+         ldrh r5, [r4]
+
          ldr r0, =0x404
          call liballoc
          mov r8, r0
+
+         add r0, r8, #0x20
+         mov r1, r5
+         call saltysd_build_prefix
+         cmp r0, #0x0
+         beq close
          add r7, r8, #0x20
-         
-         ldr r0, =mod_path+base_addr
-         call strlen
          add r7, r7, r0
          
          ldr r1, [sp, #RESOURCE_ID]
          mov r0, r7
          sub r0, r0, #0x4
          call path_str      
+
+         add r0, r8, #0x20
+         mov r1, r5
+         call saltysd_build_prefix
          add r7, r8, #0x20
-         
-         ldr r0, =mod_path+base_addr
-         call strlen
-         mov r2, r0
-         mov r0, r7
-         ldr r1, =mod_path+base_addr
-         call memcpy
                
          mov r0, r8
          call IFile_Init
@@ -129,5 +133,3 @@ skip:
 sdmc:       .asciz "sdmc:"
 .align 4
 sdmc_:      .asciz "sdmc"
-.align 4
-mod_path:   .asciz "sdmc:/saltysd/smash/"

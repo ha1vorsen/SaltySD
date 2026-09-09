@@ -2,6 +2,19 @@
 #include <stdarg.h>
 #include "../../common.h"
 
+#define SALTYSD_LOOSE_ROOT     "sd:/luma/titles/crs"
+#define SALTYSD_SD_LOOSE_ROOT  "sdmc:/luma/titles/crs/"
+#define SALTYSD_MOD_ROOT       "sd:/saltysd/smash"
+#define SALTYSD_SD_MOD_ROOT    "sdmc:/saltysd/smash/"
+#define SALTYSD_MAX_MODS       62
+#define SALTYSD_MAX_ROOTS      (SALTYSD_MAX_MODS + 1)
+
+#define SALTYSD_HEADER_FROM_SINGLETON 0x1C6D8
+#define SALTYSD_HEADER_TIMESTAMP      0x14
+#define SALTYSD_MAGIC          0x594D4C53 //'SLTY'
+#define SALTYSD_ID_BIAS        2
+#define SALTYSD_ID_SPACE       0x10000
+
 typedef struct __attribute__((__packed__))
 {
   u16 magic;
@@ -51,7 +64,9 @@ static void (*free)(void* ptr) = (void*)libdealloc_ADDR;
 static void (*memclr)(void *ptr, size_t size) = (void*)memclr_ADDR;
 static int (*strlen)(char *str) = (void*)strlen_ADDR;
 static int (*strcmp)(const char *str1, const char *str2) = (void*)strcmp_ADDR;
+#if SALTYSD_DEBUG
 static int (*vsnprintf)(char * s, size_t n, const char * format, va_list arg ) = (void*)vsnprintf_ADDR;
+#endif
 
 static u32 (*IFile_Init)(void *handle) = (void*)IFile_Init_ADDR;
 static u32 (*IFile_Open)(void *handle, char *path, u32 mode) = (void*)IFile_Open_ADDR;
@@ -172,6 +187,7 @@ u32 count_chars(char *str, char chr)
     return count;
 }
 
+#if SALTYSD_DEBUG
 void debug_print(char *str)
 {
     __asm__("svc 0x3D");
@@ -189,6 +205,51 @@ void printf(char *format, ...)
     dumb_strcat(str, "");
     debug_print(str);
     free(str);
+}
+#else
+#define printf(...) ((void)0)
+#endif
+
+typedef struct
+{
+    u32 magic;
+    u32 num_roots;
+    u8 *root_of;
+    char **prefixes;
+} saltysd_map;
+
+static saltysd_map *saltysd_get_map(void)
+{
+    u32 singleton = *(u32*)something_resource_lock_ADDR;
+    if(!singleton)
+        return NULL;
+
+    u32 header = *(u32*)(singleton + SALTYSD_HEADER_FROM_SINGLETON);
+    if(!header)
+        return NULL;
+
+    saltysd_map *map = *(saltysd_map**)(header + SALTYSD_HEADER_TIMESTAMP);
+    if(!map || map->magic != SALTYSD_MAGIC)
+        return NULL;
+
+    return map;
+}
+
+u32 saltysd_build_prefix(char *out, u32 id)
+{
+    saltysd_map *map = saltysd_get_map();
+    if(!map)
+        return 0;
+
+    u32 root = map->root_of[id & (SALTYSD_ID_SPACE-1)];
+    if(!root || root > map->num_roots)
+        return 0;
+
+    char *prefix = map->prefixes[root-1];
+    u32 len = strlen(prefix);
+
+    memcpy(out, prefix, len);
+    return len;
 }
 
 void _main(rf_header* header, void *contents)
@@ -241,111 +302,201 @@ void _main(rf_header* header, void *contents)
     crit_init(crit_this());
     mount_sdmc("sd:");
     
-    u32 num_directories = 1;
+    u32 num_roots = 0;
+    char **root_paths = malloc(SALTYSD_MAX_ROOTS*sizeof(char*));
+    char **root_prefixes = malloc(SALTYSD_MAX_ROOTS*sizeof(char*));
+
+    root_paths[0] = malloc(0x80);
+    dumb_strcpy(root_paths[0], SALTYSD_LOOSE_ROOT);
+    root_prefixes[0] = malloc(0x80);
+    dumb_strcpy(root_prefixes[0], SALTYSD_SD_LOOSE_ROOT);
+    num_roots = 1;
+
+    {
+        void *mod_entries = malloc(0x40*sizeof(DirectoryEntry));
+        void *mod_handle;
+        u16 *mod_root = malloc(0x101*sizeof(u16));
+        dumb_mbstowcs(mod_root, SALTYSD_MOD_ROOT);
+
+        if((OpenDirectory(&mod_handle, mod_root) & 0x80000000) == 0)
+        {
+            u32 found = 0;
+            do
+            {
+                found = 0;
+                ReadDirectory(&found, mod_handle, mod_entries, 0x40);
+
+                for(int j = 0; j < found && num_roots < SALTYSD_MAX_ROOTS; j++)
+                {
+                    DirectoryEntry *mod = mod_entries + j*sizeof(DirectoryEntry);
+                    if(!mod->is_directory)
+                        continue;
+
+                    char *name = malloc(0x80);
+                    name[0] = 0;
+                    dumb_wcstombs(name, mod->path);
+
+                    u32 at = 1;
+                    while(at < num_roots && strcmp(root_paths[at]+sizeof(SALTYSD_MOD_ROOT), name) < 0)
+                        at++;
+
+                    for(u32 k = num_roots; k > at; k--)
+                    {
+                        root_paths[k] = root_paths[k-1];
+                        root_prefixes[k] = root_prefixes[k-1];
+                    }
+
+                    root_paths[at] = malloc(0x80);
+                    dumb_strcpy(root_paths[at], SALTYSD_MOD_ROOT);
+                    dumb_strcat(root_paths[at], "/");
+                    dumb_strcat(root_paths[at], name);
+
+                    root_prefixes[at] = malloc(0x80);
+                    dumb_strcpy(root_prefixes[at], SALTYSD_SD_MOD_ROOT);
+                    dumb_strcat(root_prefixes[at], name);
+                    dumb_strcat(root_prefixes[at], "/");
+
+                    printf("SaltySD mod root %s", root_paths[at]);
+                    num_roots++;
+                    free(name);
+                }
+            } while(found == 0x40);
+
+            CloseDirectory(mod_handle);
+        }
+
+        free(mod_root);
+        free(mod_entries);
+    }
+
+    //Iterate through every root for every single file
+    u32 num_directories = num_roots;
     u32 num_files = 0;
     void *dir_entries = malloc(0x40*sizeof(DirectoryEntry));
     void *dir_handle;
-    u16 *dir_path = malloc(0x101*sizeof(u16));
-    dumb_mbstowcs(dir_path, "sd:/saltysd/smash");
     
     u16 **dirs = malloc(0x1000*sizeof(u16*));
+    u8 *dir_roots = malloc(0x1000*sizeof(u8));
     char **files = malloc(0x4000*sizeof(char*));
     u32 *file_sizes = malloc(0x4000*sizeof(u32));
-    dirs[0] = dir_path;
+    u8 *file_roots = malloc(0x4000*sizeof(u8));
+
+    for(int i = 0; i < num_roots; i++)
+    {
+        u16 *root_path = malloc(0x101*sizeof(u16));
+        dumb_mbstowcs(root_path, root_paths[i]);
+        dirs[i] = root_path;
+        dir_roots[i] = i;
+    }
     
     for(int i = 0; i < num_directories; i++)
     {
         u32 num_files_folders = 0;
         if((OpenDirectory(&dir_handle, dirs[i]) & 0x80000000) == 0)
         {
-            ReadDirectory(&num_files_folders, dir_handle, dir_entries, 0x40);
-            CloseDirectory(dir_handle);
-            
-            for(int j = 0; j < num_files_folders; j++)
+            //ReadDirectory only hands back as many entries as we ask for and
+            //then advances, so keep asking until it comes up short. Reading
+            //one batch drops everything past the 0x40th entry of a folder.
+            do
             {
-                DirectoryEntry *dir_entry = dir_entries + j*sizeof(DirectoryEntry);
+                num_files_folders = 0;
+                ReadDirectory(&num_files_folders, dir_handle, dir_entries, 0x40);
+
+                for(int j = 0; j < num_files_folders; j++)
+                {
+                    DirectoryEntry *dir_entry = dir_entries + j*sizeof(DirectoryEntry);
             
-                if(dir_entry->is_directory)
-                {
-                    u16 *new_dir = malloc(0x101*sizeof(u16));
-                    new_dir[0] = 0;
-                    
-                    dumb_wcscat(new_dir, dirs[i]);
-                    dumb_wcscat(new_dir, (u16*)L"/");
-                    dumb_wcscat(new_dir, dir_entry->path);
-                    dirs[num_directories] = new_dir;
-                    num_directories++;
-                }
-                else
-                {
-                    char *file = malloc(0x101);
-                    file[0] = 0;
-                    
-                    if(i != 0)
+                    if(dir_entry->is_directory)
                     {
-                        dumb_wcstombs(file, dirs[i]+sizeof("sd:/saltysd/smash/")-1);
-                        dumb_strcat(file, "/");
+                        u16 *new_dir = malloc(0x101*sizeof(u16));
+                        new_dir[0] = 0;
+
+                        dumb_wcscat(new_dir, dirs[i]);
+                        dumb_wcscat(new_dir, (u16*)L"/");
+                        dumb_wcscat(new_dir, dir_entry->path);
+                        dirs[num_directories] = new_dir;
+                        dir_roots[num_directories] = dir_roots[i];
+                        num_directories++;
                     }
-                    dumb_wcstombs(file+strlen(file), dir_entry->path);
-                        //printf("List: %s", file);
-                    
-                    if(i == 0)
+                    else
                     {
-                            //Check for revoke*.txt files
-                        char *revokenametest = malloc(0x101); memclr(revokenametest, 0x101);
-                        memcpy(revokenametest, file, strlen("revoke"));
-                        
-                        if(!strcmp(revokenametest, "revoke") && !strcmp(file+strlen(file)-4, ".txt"))
+                        char *file = malloc(0x101);
+                        file[0] = 0;
+
+                        if(i >= num_roots)
                         {
-                            char *temp_real_path = malloc(0x101);
-                            dumb_strcpy(temp_real_path, "sd:/saltysd/smash/");
-                            dumb_strcat(temp_real_path, file);
-                            IFile_Init(ifile_handle);
-                            if(IFile_Open(ifile_handle, temp_real_path, 1))
+                            u32 root_len = strlen(root_paths[dir_roots[i]]) + 1;
+                            dumb_wcstombs(file, dirs[i]+root_len);
+                            dumb_strcat(file, "/");
+                        }
+                        dumb_wcstombs(file+strlen(file), dir_entry->path);
+                        //printf("List: %s", file);
+
+                        //Root 0 only. A revoke list takes files away from every
+                        //root, so it belongs in the loose tree rather than
+                        //hidden in one mod folder among many.
+                        if(i == 0)
+                        {
+                            //Check for revoke*.txt files
+                            char *revokenametest = malloc(0x101); memclr(revokenametest, 0x101);
+                            memcpy(revokenametest, file, strlen("revoke"));
+                        
+                            if(!strcmp(revokenametest, "revoke") && !strcmp(file+strlen(file)-4, ".txt"))
                             {
-                                u32 revoke_size = IFile_GetSize(ifile_handle);
-                                u32 revoke_read = 0;
-                                char *revoke_temp_buf = malloc(revoke_size+1);
-                                IFile_Read(ifile_handle, revoke_temp_buf, revoke_size, &revoke_read);
-                                IFile_Close(ifile_handle);
+                                char *temp_real_path = malloc(0x101);
+                                dumb_strcpy(temp_real_path, root_paths[dir_roots[i]]);
+                                dumb_strcat(temp_real_path, "/");
+                                dumb_strcat(temp_real_path, file);
+                                IFile_Init(ifile_handle);
+                                if(IFile_Open(ifile_handle, temp_real_path, 1))
+                                {
+                                    u32 revoke_size = IFile_GetSize(ifile_handle);
+                                    u32 revoke_read = 0;
+                                    char *revoke_temp_buf = malloc(revoke_size+1);
+                                    IFile_Read(ifile_handle, revoke_temp_buf, revoke_size, &revoke_read);
+                                    IFile_Close(ifile_handle);
 
                                     //Terminated at what was read: every reader
                                     //below walks it as a string.
-                                if(revoke_read > revoke_size)
-                                    revoke_read = revoke_size;
-                                revoke_temp_buf[revoke_read] = 0;
+                                    if(revoke_read > revoke_size)
+                                        revoke_read = revoke_size;
+                                    revoke_temp_buf[revoke_read] = 0;
 
                                     //Sized and copied by the text already held,
                                     //plus a separator and this file. The new
                                     //buffer is a string before anything appends
                                     //to it.
-                                u32 revoke_held = revoke_buf ? strlen(revoke_buf) : 0;
-                                char *new_alloc = malloc(revoke_held+1+revoke_read+1);
-                                new_alloc[0] = 0;
-                                if(revoke_buf)
-                                {
-                                    dumb_strcpy(new_alloc, revoke_buf);
-                                    free(revoke_buf);
-                                }
-                                revoke_buf = new_alloc;
+                                    u32 revoke_held = revoke_buf ? strlen(revoke_buf) : 0;
+                                    char *new_alloc = malloc(revoke_held+1+revoke_read+1);
+                                    new_alloc[0] = 0;
+                                    if(revoke_buf)
+                                    {
+                                        dumb_strcpy(new_alloc, revoke_buf);
+                                        free(revoke_buf);
+                                    }
+                                    revoke_buf = new_alloc;
 
-                                dumb_strcat(revoke_buf, "\n");
-                                dumb_strcat(revoke_buf, revoke_temp_buf);
-                                revoke_total_size = strlen(revoke_buf);
-                                free(revoke_temp_buf);
+                                    dumb_strcat(revoke_buf, "\n");
+                                    dumb_strcat(revoke_buf, revoke_temp_buf);
+                                    revoke_total_size = strlen(revoke_buf);
+                                    free(revoke_temp_buf);
+                                }
+                                free(temp_real_path);
+                                free(revokenametest);
+                                continue;
                             }
-                            free(temp_real_path);
                             free(revokenametest);
-                            continue;
                         }
-                        free(revokenametest);
-                    }
                     
-                    files[num_files] = file;
-                    file_sizes[num_files] = dir_entry->file_size & 0xFFFFFFFF;
-                    num_files++;
+                        files[num_files] = file;
+                        file_sizes[num_files] = dir_entry->file_size & 0xFFFFFFFF;
+                        file_roots[num_files] = dir_roots[i];
+                        num_files++;
+                    }
                 }
-            }
+            } while(num_files_folders == 0x40);
+
+            CloseDirectory(dir_handle);
         }
         
         free(dirs[i]);
@@ -393,6 +544,11 @@ void _main(rf_header* header, void *contents)
         }
         revoke_count = revoke_active_count;
     }
+    
+    //One byte of root per resource id. Indexed by id rather than ordinal, so it
+    //has to be shifted alongside the entries whenever a new one is inserted.
+    u8 *root_table = malloc(SALTYSD_ID_SPACE);
+    memclr(root_table, SALTYSD_ID_SPACE);
     
     char *full_name = malloc(0x400);
     memclr(full_name, 0x400);
@@ -466,6 +622,8 @@ void _main(rf_header* header, void *contents)
         //If we have a file, adjust file sizes
         if(full_name[strlen(full_name)-1] != '/')
         {
+            int winner = -1;
+
             for(int j = 0; j < num_files; j++)
             {
                 if(files[j] == NULL)
@@ -473,18 +631,66 @@ void _main(rf_header* header, void *contents)
                     
                 if(!strcmp(full_name, files[j]))
                 {
-                    free(files[j]);
-                    files[j] = NULL;
-                    
-                    if(!existing_revoked)
+                    if(winner < 0 || file_roots[j] < file_roots[winner])
                     {
-                    //By overriding the compressed size, our files are forced into only one hook
-                        (*entries)[i].comp_size = file_sizes[j];
-                        (*entries)[i].decomp_size = file_sizes[j];
-                        (*entries)[i].flags |= 0x8000;
+                        if(winner >= 0)
+                        {
+                            free(files[winner]);
+                            files[winner] = NULL;
+                        }
+                        winner = j;
+                    }
+                    else
+                    {
+                        free(files[j]);
+                        files[j] = NULL;
                     }
                 }
             }
+
+            if(winner >= 0)
+            {
+                if(!existing_revoked)
+                {
+                    //By overriding the compressed size, our files are forced into only one hook
+                    (*entries)[i].comp_size = file_sizes[winner];
+                    (*entries)[i].decomp_size = file_sizes[winner];
+                    (*entries)[i].flags |= 0x8000;
+                    root_table[i + SALTYSD_ID_BIAS] = file_roots[winner] + 1;
+                }
+
+                free(files[winner]);
+                files[winner] = NULL;
+            }
+        }
+    }
+    
+    //Whatever is left is a file the archives do not have at all. Two roots can
+    //still offer the same new file, so collapse those before any become entries.
+    for(int i = 0; i < num_files; i++)
+    {
+        if(files[i] == NULL)
+            continue;
+
+        for(int j = i+1; j < num_files; j++)
+        {
+            if(files[j] == NULL)
+                continue;
+
+            if(strcmp(files[i], files[j]))
+                continue;
+
+            if(file_roots[j] < file_roots[i])
+            {
+                free(files[i]);
+                files[i] = files[j];
+                file_sizes[i] = file_sizes[j];
+                file_roots[i] = file_roots[j];
+            }
+            else
+                free(files[j]);
+
+            files[j] = NULL;
         }
     }
     
@@ -515,7 +721,9 @@ void _main(rf_header* header, void *contents)
         printf("Adding file %s", files[i]);
         
         u32 entry_to_shift = 1; 
+#if SALTYSD_DEBUG
         u8 entered_packed = 0;
+#endif
         u8 level_target = 1;
         char *substr = malloc(0x101);
         
@@ -592,7 +800,9 @@ void _main(rf_header* header, void *contents)
                 
                 if((*entries)[entry_to_shift].flags & 0x1000)
                 {
+#if SALTYSD_DEBUG
                     entered_packed = 1;
+#endif
                     printf("entered packed"); 
                 }   
                 level_target++;
@@ -611,9 +821,13 @@ void _main(rf_header* header, void *contents)
         printf("adding %x entries after %x (%s)", entries_to_make, entry_to_shift, files[i]+seed_len-strlen(substr));
         
         if(entry_to_shift != header->resourceentry_amt)
+        {
             memmove(&(*entries)[entry_to_shift+entries_to_make], &(*entries)[entry_to_shift], (u32)&(*entries)[header->resourceentry_amt] - (u32)&(*entries)[entry_to_shift]);
+            memmove(root_table + entry_to_shift + entries_to_make + SALTYSD_ID_BIAS, root_table + entry_to_shift + SALTYSD_ID_BIAS, header->resourceentry_amt - entry_to_shift);
+        }
             
         memclr(&(*entries)[entry_to_shift], 0x18*entries_to_make);
+        memclr(root_table + entry_to_shift + SALTYSD_ID_BIAS, entries_to_make);
         
         //Create all our new folders
         for(int j = 0; j < entries_to_make-1; j++)
@@ -713,6 +927,7 @@ void _main(rf_header* header, void *contents)
         (*entries)[entry_to_shift].decomp_size = file_sizes[i];
         (*entries)[entry_to_shift].timestamp = 0;
         (*entries)[entry_to_shift].flags = 0x8000 | 0xC00 | level_target;
+        root_table[entry_to_shift + SALTYSD_ID_BIAS] = file_roots[i] + 1;
         last_str_addr += strlen(substr)+1;
         header->resourceentry_amt++;
         header->entrysection_size += 0x18;
@@ -727,6 +942,15 @@ void _main(rf_header* header, void *contents)
     free(extensions);
     free(blocks);
     free(ifile_handle);
+    //Publish the map. The header's timestamp is unused by the game, and the
+    //load hooks reach it from the resource manager singleton.
+    saltysd_map *map = malloc(sizeof(saltysd_map));
+    map->magic = SALTYSD_MAGIC;
+    map->num_roots = num_roots;
+    map->root_of = root_table;
+    map->prefixes = root_prefixes;
+    header->timestamp = (u32)map;
+
     unmount_path("sd");
     
     return;
