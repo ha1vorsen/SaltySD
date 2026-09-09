@@ -4,6 +4,10 @@
 .global _start
 
 _start:
+    b _rf_init
+    b saltysd_build_prefix
+
+_rf_init:
     add lr, lr, #0x4
     
     push {r0-r12,lr}
