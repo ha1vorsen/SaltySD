@@ -26,7 +26,16 @@ ls_sig = b2str([0x00, 0x50, 0xA0, 0xE1, 0x44, 0x00, 0x9D, 0xE5, 0x00, 0x40, 0xA0
 ls_alloc_sig = b2str([0x44, 0x00, 0x9D, 0xE5, 0x80, 0x20, 0xA0, 0xE3, 0x00, 0x02, 0xA0, 0xE1, 0x7F, 0x00, 0x80, 0xE2])
 thread_sig = b2str([0x08, 0xD0, 0x4D, 0xE2, 0x00, 0x60, 0xA0, 0xE1, 0x04, 0x00, 0x92, 0xE5])
 norm_sig = b2str([0x05, 0x20, 0xA0, 0xE1, 0x07, 0x10, 0xA0, 0xE1, 0x06, 0x00, 0xA0, 0xE1, 0x03, 0x00, 0x00, 0x9A])
-sdsound_sig = "%s/snd_bgm_%s.nus3bank"
+bgm_sig = "%s/snd_bgm_%s.nus3bank"
+
+# function's epilogue, both replayed by sdbgm.asm and checked before anything is
+# written. Hooking after the track name resolves, rather than overwriting one of
+# the three base pointers, keeps the rom:/patch tier and allows more than one
+# directory.
+bgm_site = [0xe1a03000, 0xe59f20b0, 0xe28f10b0, 0xe1a00005]
+bgm_tail = [0xe28dd008, 0xe8bd8070]
+bgm_hook_offs = -0xC0
+bgm_tail_offs = 0x8C
 
 #Make this compatible with Python 2 and 3
 try:
@@ -44,9 +53,10 @@ rf_payload= readbytes("resource_mod/resource_mod.bin")
 #ls_payload= readbytes("ls_mod/ls_mod.bin")  
 thread_payload = readbytes("bin/threadload.bin")
 norm_payload = readbytes("bin/normload.bin")
-sdsound = readbytes("bin/sdsound.bin")
+sdbgm = readbytes("bin/sdbgm.bin")
 
-sdsound_func_addr = f.find(sdsound_sig)-0x4
+bgm_str_addr = f.find(bgm_sig)
+bgm_hook_addr = bgm_str_addr + bgm_hook_offs
 
 rf_hook_addr = f.find(rf_sig)
 rf_alloc_addr = f.find(rf_alloc_sig)
@@ -60,7 +70,7 @@ rf_payload_addr = 0xA33000-0x100000
 ls_payload_addr = 0xA36000-0x100000
 thread_payload_addr = 0xA36000-0x100000
 norm_payload_addr = 0xA36800-0x100000
-sdsound_addr = 0xA36B00-0x100000
+sdbgm_addr = 0xA36B00-0x100000
 
 # Just convert f to bytes now that we're done searching things.
 try:
@@ -87,16 +97,20 @@ f = insertreplace(f,rf_payload,rf_payload_addr)
 #f = insertreplace(f,ls_payload,ls_payload_addr)
 f = insertreplace(f,thread_payload,thread_payload_addr)
 f = insertreplace(f,norm_payload,norm_payload_addr)
-f = insertreplace(f,sdsound,sdsound_addr)
+f = insertreplace(f,sdbgm,sdbgm_addr)
 
-# This should be a pointer, if it isn't this is likely a pre-update version or Demo.
-if(r32(f,sdsound_func_addr+0x1C) & 0xFF000000 != 0):
-    print("This is likely a version of Smash which doesn't utilize update data (1.0.1, Demo)!\nSound override is not supported with these versions.")
+def words_match(addr, words):
+    return all(r32(f, addr + i*4) == word for i, word in enumerate(words))
+
+# A version whose path builder isn't the one sdbgm.asm was written against loses
+# BGM override rather than taking a branch into the middle of something else.
+# Pre-update versions (1.0.1, Demo) land here too.
+if(bgm_str_addr < 0 or not words_match(bgm_hook_addr, bgm_site)
+   or not words_match(bgm_hook_addr+bgm_tail_offs, bgm_tail)):
+    print("The BGM path builder isn't the one this hook was written against.\nSound override is not supported with this version.")
     w.write(f)
     exit(0)
     
-orig_ptr = r32(f,sdsound_func_addr)
-f = insertreplace(f,struct.pack('<I', orig_ptr),sdsound_func_addr+0x1C)
-f = insertreplace(f,struct.pack('<I', sdsound_addr+0x100000),sdsound_func_addr)
+bl_offs = ((sdbgm_addr - bgm_hook_addr) - 0x8) >> 2
+f = insertreplace(f,struct.pack('<I', 0xEB000000 | (bl_offs & 0xFFFFFF)),bgm_hook_addr)
 w.write(f)
-

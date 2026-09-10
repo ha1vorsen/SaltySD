@@ -3,9 +3,11 @@
 .align 4
 .global _start
 
+@   0xA33008  named path builder, called from cro_redir.asm and sdbgm.asm
 _start:
     b _rf_init
     b saltysd_build_prefix
+    b saltysd_build_named_path
 
 _rf_init:
     add lr, lr, #0x4

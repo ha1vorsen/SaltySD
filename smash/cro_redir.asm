@@ -13,6 +13,11 @@ CRO_CODE_START equ (0xB0)
 CRO_NAMED_EXPORT_PTR equ (0xD0)
 CRO_NAMED_EXPORT_NUM equ (0xD4)
 
+; Entry table at the head of the resource_mod payload. Slot 2 answers which mod
+; folder supplies a file in a channel with no resource id.
+saltysd_build_named_path equ (0xa33008)
+SALTYSD_KIND_CRO equ (0x0)
+
 ; Expand the CRO load object to 8 from 4
 .org cro_load_object_adj_loc
     mov r0, #0x8
@@ -184,9 +189,6 @@ cro_search_loop:
          swi 0x3D
       pop {r0-r1}
 
-      ; A node whose CRO is not loaded has no export table, so the answer for
-      ; it is "not here" rather than a read off address zero.
-      mov r0, #0x0
       ldr r1, [r5, #BUFFER_LOAD_ADDR]
       cmp r1, #0x0
       beq cro_search_next
@@ -805,13 +807,14 @@ cro_file_size_intercept:
       str r0, [sp, #FILE_HANDLE]
       add r0, r0, #0x100
       str r0, [sp, #FILE_PATH]
-      ldr r1, =mod_path
-      bl strcpy
       
-      ldr r0, [sp, #FILE_PATH]
-      ldr r1, [sp, #CRO_PATH]
-      ldr r2, =strcat+1
-      blx r2
+      mov r1, #0x300
+      mov r2, #SALTYSD_KIND_CRO
+      ldr r3, [sp, #CRO_PATH]
+      ldr r12, =saltysd_build_named_path
+      blx r12
+      cmp r0, #0x0
+      beq size_close_and_end
       
       ; Print the string to debug console
       ldr r0, [sp, #FILE_PATH]
@@ -881,13 +884,14 @@ cro_file_intercept:
       str r0, [sp, #FILE_HANDLE]
       add r0, r0, #0x100
       str r0, [sp, #FILE_PATH]
-      ldr r1, =mod_path
-      bl strcpy
       
-      ldr r0, [sp, #FILE_PATH]
-      ldr r1, [sp, #CRO_PATH]
-      ldr r2, =strcat+1
-      blx r2
+      mov r1, #0x300
+      mov r2, #SALTYSD_KIND_CRO
+      ldr r3, [sp, #CRO_PATH]
+      ldr r12, =saltysd_build_named_path
+      blx r12
+      cmp r0, #0x0
+      beq close_and_end
       
       ; Print the string to debug console
       ldr r0, [sp, #FILE_PATH]
@@ -939,9 +943,6 @@ close_and_end:
 
 .align 4
 sdmc:       .ascii "sdmc:",0
-.align 4
-mod_path:   .ascii "sdmc:/saltysd/smash/cro/"
-mod_path_end: .byte 0
 .align 4
 meme: .ascii "file exists",0
 .align 4

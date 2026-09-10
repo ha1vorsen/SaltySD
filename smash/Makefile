@@ -33,8 +33,8 @@ all:
 	@$(AS) "normload.asm"
 	@$(OBJCOPY) -O binary a.out "bin/normload.bin"
 	@rm a.out
-	@$(AS) "sdsound.asm"
-	@$(OBJCOPY) -O binary a.out "bin/sdsound.bin"
+	@$(AS) "sdbgm.asm"
+	@$(OBJCOPY) -O binary a.out "bin/sdbgm.bin"
 	@rm a.out
 	@python patch.py code.bin
 	@armips cro_redir.asm
