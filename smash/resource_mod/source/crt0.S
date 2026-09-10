@@ -8,9 +8,11 @@
 @ Both slots have to stay where they are:
 @   0xA33000  RF init, called from resource_mod/hookresource.asm
 @   0xA33004  prefix builder, called from normload.asm and threadload.asm
+@   0xA33008  named path builder, called from cro_redir.asm and sdbgm.asm
 _start:
     b _rf_init
     b saltysd_build_prefix
+    b saltysd_build_named_path
 
 _rf_init:
     add lr, lr, #0x4

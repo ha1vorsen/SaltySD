@@ -1,6 +1,6 @@
-### Smash dt/ls SD Redirect v1.2
+### Smash dt/ls SD Redirect v1.3
 
-These edits redirect the romfs:/dt and romfs:/ls files to load straight from sdmc:/saltysd/smash, allowing for modifications and additions of any file without the need to repack or alter existing archives. SD loaded files take first priority, with update files next followed by the original content. All addresses are found automatically based on the code.bin and the payloads adjusted accordingly. If you are creating a modified update CIA or HANS codebin you must make sure your code.bin is decompressed.
+These edits redirect the romfs:/dt and romfs:/ls files to load straight from the SD card, allowing for modifications and additions of any file without the need to repack or alter existing archives. SD loaded files take first priority, with update files next followed by the original content. All addresses are found automatically based on the code.bin and the payloads adjusted accordingly. If you are creating a modified update CIA or HANS codebin you must make sure your code.bin is decompressed.
 
 **Patching Instructions**
 
@@ -8,9 +8,20 @@ These edits redirect the romfs:/dt and romfs:/ls files to load straight from sdm
  * Grab the latest armips from [here](https://buildbot.orphis.net/armips/) and make sure it is in this folder or your PATH.
  * Build with Makefile provided. The code.bin will be scanned and patched to code_saltysd.bin
 
-**CRO Override**
+**Override Layout**
 
- * SaltySD v1.2 has support for loading CROs from the SD card. CROs are stored in the same heirarchy as they are in `rom:/cro.sarc`/`rex:/cro.sarc`, ie `fighter/falco` would be overridden on SD as `sdmc:/saltysd/smash/cro/fighter/falco`.
+ * Loose files mirror the game's own tree and live under `sd:/luma/titles/crs/`, ie `param/fighter/fighter_param_common.bin`.
+ * Mod folders are self contained: one folder per mod under `sd:/saltysd/smash/`, each holding files at the paths the game uses, ie `sd:/saltysd/smash/MyMod/param/fighter/fighter_param_common.bin`.
+ * Nothing directly under `saltysd/smash` is a game path, so a mod folder can be named anything.
+ * A loose file beats a mod supplying the same path. Two mods supplying the same path is a conflict rather than a ranking; remove one.
+ * `revoke*.txt` lists are read from the loose tree only, ie `sd:/luma/titles/crs/revoke-effects.txt`. A revoke list takes files away from every root, so one inside a mod folder is ignored.
+
+**CRO and BGM Override**
+
+ * CROs are stored in the same heirarchy as they are in `rom:/cro.sarc`/`rex:/cro.sarc`, under a `cro/` directory, ie `fighter/falco` is overridden as `cro/fighter/falco`.
+ * BGM is stored under `sound/bgm/`, named as the game names it, ie `sound/bgm/snd_bgm_menu.nus3bank`.
+ * Both work in either layout, ie `sd:/luma/titles/crs/cro/fighter/falco` or `sd:/saltysd/smash/MyMod/cro/fighter/falco`.
+ * A track no mod supplies falls through to the game's own search, unchanged: `rex:`, then `rom:/patch`, then `rom:`.
 
 **Caching**
 
@@ -18,5 +29,6 @@ Caching is no longer used as of SaltySD 0.9
 
 **Notes**
 
+ * This layout is a critical change. Content left directly under `sd:/saltysd/smash/` by an older SaltySD no longer resolves: loose files there are ignored, and a game folder such as `param/` is read as a mod named `param`. Move that content to `sd:/luma/titles/crs/`.
  * Non-update versions (Demo, 1.0.1) have not been tested with SaltySD and are unlikely to work yet, versions past those but under 1.1.3 may not work, but are more likely to work. In addition to this, the Smash Demo does not have SDMC access in it's exheader, so SaltySD would never work with the Demo without a modified version to grant permissions.
  * Creating modified CIAs is not advised, as Citra and Luma CFW both support code.bin override and Luma CFW has support for IPS patching.

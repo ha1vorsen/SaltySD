@@ -8,6 +8,17 @@
 #define SALTYSD_SD_MOD_ROOT    "sdmc:/saltysd/smash/"
 #define SALTYSD_MAX_MODS       62
 #define SALTYSD_MAX_ROOTS      (SALTYSD_MAX_MODS + 1)
+#define SALTYSD_MAX_MOD_NAME   0x40
+
+//CROs and BGM live outside the resource tree and have no RF entry, so neither
+//can be reached through the id-keyed map nor registered as a new one. Files
+//under these prefixes are published in a name-keyed table instead.
+#define SALTYSD_CRO_DIR        "cro/"
+#define SALTYSD_BGM_DIR        "sound/bgm/"
+#define SALTYSD_BGM_STEM       "snd_bgm_"
+#define SALTYSD_BGM_EXT        ".nus3bank"
+#define SALTYSD_KIND_CRO       0
+#define SALTYSD_KIND_BGM       1
 
 #define SALTYSD_HEADER_FROM_SINGLETON 0x1C6D8
 #define SALTYSD_HEADER_TIMESTAMP      0x14
@@ -56,6 +67,20 @@ typedef struct __attribute__((__packed__))
     u8 is_readonly;
     u64 file_size;
 } DirectoryEntry;
+
+typedef struct
+{
+    char *path;     //"sd:/..." as the boot time scan walks it
+    char *prefix;   //"sdmc:/.../" as the load hooks spell it, trailing slash included
+    char *name;     //mod folder name, NULL for the loose root
+    u8 enabled;     //the only thing there is to decide about a mod
+} saltysd_root;
+
+typedef struct
+{
+    char *path;     //root relative game path, ie "cro/fighter/falco"
+    u8 root;        //winning root plus one, matching root_of
+} saltysd_named;
 
 static void (*memcpy)(void *dest, const void *src, size_t n) = (void*)memcpy_ADDR;
 static void (*memmove)(void *dest, const void *src, size_t n) = (void*)memmove_ADDR;
@@ -158,6 +183,38 @@ char *dumb_wcstombs(char *dest, u16 *src)
     return dest;
 }
 
+char *dumb_wcstombsn(char *dest, u16 *src, u32 len)
+{
+    u32 count = 0;
+    while(count < len-1 && src[count])
+    {
+        dest[count] = (u8)(src[count] & 0xFF);
+        count++;
+    }
+    dest[count] = 0;
+    return dest;
+}
+
+//Field by field rather than a struct assignment: the compiler turns those into
+//a call to the real memmove, which this payload does not link against.
+void copy_root(saltysd_root *dest, saltysd_root *src)
+{
+    dest->path = src->path;
+    dest->prefix = src->prefix;
+    dest->name = src->name;
+    dest->enabled = src->enabled;
+}
+
+bool starts_with(char *str, char *prefix)
+{
+    while(*prefix)
+    {
+        if(*str++ != *prefix++)
+            return false;
+    }
+    return true;
+}
+
 u32 len_to(char *str, char chr)
 {
     u32 count = 0;
@@ -188,9 +245,13 @@ u32 count_chars(char *str, char chr)
 }
 
 #if SALTYSD_DEBUG
+//svc 0x3D takes the string in r0 and its length in r1; both are pinned here.
 void debug_print(char *str)
 {
-    __asm__("svc 0x3D");
+    u32 n = strlen(str);
+    register char *addr __asm__("r0") = str;
+    register u32 len __asm__("r1") = n;
+    __asm__ volatile("svc 0x3D" :: "r"(addr), "r"(len) : "memory");
 }
 
 void printf(char *format, ...)
@@ -215,7 +276,9 @@ typedef struct
     u32 magic;
     u32 num_roots;
     u8 *root_of;
-    char **prefixes;
+    saltysd_root *roots;
+    u32 num_named;
+    saltysd_named *named;
 } saltysd_map;
 
 static saltysd_map *saltysd_get_map(void)
@@ -245,11 +308,73 @@ u32 saltysd_build_prefix(char *out, u32 id)
     if(!root || root > map->num_roots)
         return 0;
 
-    char *prefix = map->prefixes[root-1];
+    char *prefix = map->roots[root-1].prefix;
     u32 len = strlen(prefix);
 
     memcpy(out, prefix, len);
     return len;
+}
+
+u32 saltysd_build_named_path(char *out, u32 out_size, u32 kind, char *name)
+{
+    saltysd_map *map = saltysd_get_map();
+    if(!map || !map->num_named)
+        return 0;
+
+    u32 key_len = strlen(name) + (kind == SALTYSD_KIND_BGM
+        ? sizeof(SALTYSD_BGM_DIR SALTYSD_BGM_STEM SALTYSD_BGM_EXT) - 1
+        : sizeof(SALTYSD_CRO_DIR) - 1);
+    if(key_len + 1 > out_size)
+        return 0;
+
+    out[0] = 0;
+    if(kind == SALTYSD_KIND_BGM)
+    {
+        dumb_strcat(out, SALTYSD_BGM_DIR SALTYSD_BGM_STEM);
+        dumb_strcat(out, name);
+        dumb_strcat(out, SALTYSD_BGM_EXT);
+    }
+    else
+    {
+        dumb_strcat(out, SALTYSD_CRO_DIR);
+        dumb_strcat(out, name);
+    }
+
+    //Conflicts were resolved at boot, so the first match is the winner.
+    u32 root = 0;
+    for(u32 i = 0; i < map->num_named; i++)
+    {
+        if(!strcmp(map->named[i].path, out))
+        {
+            root = map->named[i].root;
+            break;
+        }
+    }
+
+    if(!root || root > map->num_roots)
+        return 0;
+
+    char *prefix = map->roots[root-1].prefix;
+    u32 prefix_len = strlen(prefix);
+    if(prefix_len + key_len + 1 > out_size)
+        return 0;
+
+    memmove(out + prefix_len, out, key_len + 1);
+    memcpy(out, prefix, prefix_len);
+    return prefix_len + key_len;
+}
+
+static void saltysd_mod_config(saltysd_root *mod)
+{
+    mod->enabled = 1;
+}
+
+static void report_conflict(saltysd_root *roots, u8 a, u8 b, char *path)
+{
+    if(a == 0 || b == 0)
+        return;
+
+    printf("SaltySD conflict %s: %s and %s", path, roots[a].name, roots[b].name);
 }
 
 void _main(rf_header* header, void *contents)
@@ -303,13 +428,14 @@ void _main(rf_header* header, void *contents)
     mount_sdmc("sd:");
     
     u32 num_roots = 0;
-    char **root_paths = malloc(SALTYSD_MAX_ROOTS*sizeof(char*));
-    char **root_prefixes = malloc(SALTYSD_MAX_ROOTS*sizeof(char*));
+    saltysd_root *roots = malloc(SALTYSD_MAX_ROOTS*sizeof(saltysd_root));
 
-    root_paths[0] = malloc(0x80);
-    dumb_strcpy(root_paths[0], SALTYSD_LOOSE_ROOT);
-    root_prefixes[0] = malloc(0x80);
-    dumb_strcpy(root_prefixes[0], SALTYSD_SD_LOOSE_ROOT);
+    roots[0].path = malloc(0x80);
+    dumb_strcpy(roots[0].path, SALTYSD_LOOSE_ROOT);
+    roots[0].prefix = malloc(0x80);
+    dumb_strcpy(roots[0].prefix, SALTYSD_SD_LOOSE_ROOT);
+    roots[0].name = NULL;
+    roots[0].enabled = 1;
     num_roots = 1;
 
     {
@@ -332,33 +458,43 @@ void _main(rf_header* header, void *contents)
                     if(!mod->is_directory)
                         continue;
 
-                    char *name = malloc(0x80);
-                    name[0] = 0;
-                    dumb_wcstombs(name, mod->path);
+                    saltysd_root mod_root_rec;
 
+                    mod_root_rec.name = malloc(SALTYSD_MAX_MOD_NAME);
+                    dumb_wcstombsn(mod_root_rec.name, mod->path, SALTYSD_MAX_MOD_NAME);
+
+                    mod_root_rec.path = malloc(0x80);
+                    dumb_strcpy(mod_root_rec.path, SALTYSD_MOD_ROOT);
+                    dumb_strcat(mod_root_rec.path, "/");
+                    dumb_strcat(mod_root_rec.path, mod_root_rec.name);
+
+                    mod_root_rec.prefix = malloc(0x80);
+                    dumb_strcpy(mod_root_rec.prefix, SALTYSD_SD_MOD_ROOT);
+                    dumb_strcat(mod_root_rec.prefix, mod_root_rec.name);
+                    dumb_strcat(mod_root_rec.prefix, "/");
+
+                    saltysd_mod_config(&mod_root_rec);
+                    if(!mod_root_rec.enabled)
+                    {
+                        printf("SaltySD mod disabled %s", mod_root_rec.name);
+                        free(mod_root_rec.prefix);
+                        free(mod_root_rec.path);
+                        free(mod_root_rec.name);
+                        continue;
+                    }
+
+                    //Ordered by name, so root order is the same on every
+                    //boot.
                     u32 at = 1;
-                    while(at < num_roots && strcmp(root_paths[at]+sizeof(SALTYSD_MOD_ROOT), name) < 0)
+                    while(at < num_roots && strcmp(roots[at].name, mod_root_rec.name) < 0)
                         at++;
 
                     for(u32 k = num_roots; k > at; k--)
-                    {
-                        root_paths[k] = root_paths[k-1];
-                        root_prefixes[k] = root_prefixes[k-1];
-                    }
+                        copy_root(&roots[k], &roots[k-1]);
 
-                    root_paths[at] = malloc(0x80);
-                    dumb_strcpy(root_paths[at], SALTYSD_MOD_ROOT);
-                    dumb_strcat(root_paths[at], "/");
-                    dumb_strcat(root_paths[at], name);
-
-                    root_prefixes[at] = malloc(0x80);
-                    dumb_strcpy(root_prefixes[at], SALTYSD_SD_MOD_ROOT);
-                    dumb_strcat(root_prefixes[at], name);
-                    dumb_strcat(root_prefixes[at], "/");
-
-                    printf("SaltySD mod root %s", root_paths[at]);
+                    copy_root(&roots[at], &mod_root_rec);
+                    printf("SaltySD mod root %s", roots[at].path);
                     num_roots++;
-                    free(name);
                 }
             } while(found == 0x40);
 
@@ -384,7 +520,7 @@ void _main(rf_header* header, void *contents)
     for(int i = 0; i < num_roots; i++)
     {
         u16 *root_path = malloc(0x101*sizeof(u16));
-        dumb_mbstowcs(root_path, root_paths[i]);
+        dumb_mbstowcs(root_path, roots[i].path);
         dirs[i] = root_path;
         dir_roots[i] = i;
     }
@@ -425,7 +561,7 @@ void _main(rf_header* header, void *contents)
 
                         if(i >= num_roots)
                         {
-                            u32 root_len = strlen(root_paths[dir_roots[i]]) + 1;
+                            u32 root_len = strlen(roots[dir_roots[i]].path) + 1;
                             dumb_wcstombs(file, dirs[i]+root_len);
                             dumb_strcat(file, "/");
                         }
@@ -444,7 +580,7 @@ void _main(rf_header* header, void *contents)
                             if(!strcmp(revokenametest, "revoke") && !strcmp(file+strlen(file)-4, ".txt"))
                             {
                                 char *temp_real_path = malloc(0x101);
-                                dumb_strcpy(temp_real_path, root_paths[dir_roots[i]]);
+                                dumb_strcpy(temp_real_path, roots[dir_roots[i]].path);
                                 dumb_strcat(temp_real_path, "/");
                                 dumb_strcat(temp_real_path, file);
                                 IFile_Init(ifile_handle);
@@ -545,6 +681,65 @@ void _main(rf_header* header, void *contents)
         revoke_count = revoke_active_count;
     }
     
+    //Hold back the two channels that live outside the resource tree, before the
+    //fixup pass can match them or the insertion pass register them. cro/ and
+    //sound/bgm/ have no chunk to point at, so such an entry can never be served.
+    u32 num_named = 0;
+    for(int i = 0; i < num_files; i++)
+    {
+        if(files[i] && (starts_with(files[i], SALTYSD_CRO_DIR) ||
+                        starts_with(files[i], SALTYSD_BGM_DIR)))
+            num_named++;
+    }
+
+    saltysd_named *named = num_named ? malloc(num_named*sizeof(saltysd_named)) : NULL;
+    u32 named_count = 0;
+    for(int i = 0; i < num_files; i++)
+    {
+        if(files[i] == NULL)
+            continue;
+
+        if(!starts_with(files[i], SALTYSD_CRO_DIR) &&
+           !starts_with(files[i], SALTYSD_BGM_DIR))
+            continue;
+
+        //Two mods can offer the same one; resolved as in the tree.
+        int at = -1;
+        for(u32 j = 0; j < named_count; j++)
+        {
+            if(!strcmp(named[j].path, files[i]))
+            {
+                at = j;
+                break;
+            }
+        }
+
+        if(at < 0)
+        {
+            printf("SaltySD named %x %s", file_roots[i], files[i]);
+            named[named_count].path = files[i];
+            named[named_count].root = file_roots[i] + 1;
+            named_count++;
+        }
+        else
+        {
+            report_conflict(roots, named[at].root - 1, file_roots[i], files[i]);
+
+            if(file_roots[i] + 1 < named[at].root)
+            {
+                free(named[at].path);
+                named[at].path = files[i];
+                named[at].root = file_roots[i] + 1;
+            }
+            else
+                free(files[i]);
+        }
+
+        //The string is the table's now, so drop the entry either way.
+        files[i] = NULL;
+    }
+    num_named = named_count;
+
     //One byte of root per resource id. Indexed by id rather than ordinal, so it
     //has to be shifted alongside the entries whenever a new one is inserted.
     u8 *root_table = malloc(SALTYSD_ID_SPACE);
@@ -629,22 +824,29 @@ void _main(rf_header* header, void *contents)
                 if(files[j] == NULL)
                     continue;
                     
-                if(!strcmp(full_name, files[j]))
+                if(strcmp(full_name, files[j]))
+                    continue;
+
+                if(winner < 0)
                 {
-                    if(winner < 0 || file_roots[j] < file_roots[winner])
-                    {
-                        if(winner >= 0)
-                        {
-                            free(files[winner]);
-                            files[winner] = NULL;
-                        }
-                        winner = j;
-                    }
-                    else
-                    {
-                        free(files[j]);
-                        files[j] = NULL;
-                    }
+                    winner = j;
+                    continue;
+                }
+
+                //More than one root supplying the same file. The loser is
+                //dropped here so it cannot come back as a duplicate entry.
+                report_conflict(roots, file_roots[winner], file_roots[j], full_name);
+
+                if(file_roots[j] < file_roots[winner])
+                {
+                    free(files[winner]);
+                    files[winner] = NULL;
+                    winner = j;
+                }
+                else
+                {
+                    free(files[j]);
+                    files[j] = NULL;
                 }
             }
 
@@ -679,6 +881,8 @@ void _main(rf_header* header, void *contents)
 
             if(strcmp(files[i], files[j]))
                 continue;
+
+            report_conflict(roots, file_roots[i], file_roots[j], files[i]);
 
             if(file_roots[j] < file_roots[i])
             {
@@ -948,7 +1152,9 @@ void _main(rf_header* header, void *contents)
     map->magic = SALTYSD_MAGIC;
     map->num_roots = num_roots;
     map->root_of = root_table;
-    map->prefixes = root_prefixes;
+    map->roots = roots;
+    map->num_named = num_named;
+    map->named = named;
     header->timestamp = (u32)map;
 
     unmount_path("sd");
