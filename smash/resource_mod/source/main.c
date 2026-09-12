@@ -13,6 +13,8 @@
 #define SALTYSD_MAX_DIRS       0x1000
 #define SALTYSD_MAX_FILES      0x4000
 #define SALTYSD_MAX_PATH       0x101
+#define SALTYSD_MAX_EXT        0x10
+#define SALTYSD_MAX_EXTENSIONS 0x3E
 
 //CROs and BGM live outside the resource tree and have no RF entry, so neither
 //can be reached through the id-keyed map nor registered as a new one. Files
@@ -233,6 +235,19 @@ u32 len_to(char *str, char chr)
     return count;
 }
 
+//The last one, where len_to answers the first. Hands back the index itself
+//rather than a length, and -1 when the character is not there at all.
+u32 last_index_of(char *str, char chr)
+{
+    u32 found = -1;
+    for(u32 i = 0; str[i]; i++)
+    {
+        if(str[i] == chr)
+            found = i;
+    }
+    return found;
+}
+
 u32 count_chars(char *str, char chr)
 {
     u32 i = 0;
@@ -431,7 +446,11 @@ void _main(rf_header* header, void *contents)
         blocks[i] = string_section_next + sizeof(u32) + (0x2000*i*sizeof(u8));
     }
     
-    char **extensions = malloc(*(u32*)extensions_block * sizeof(char*));
+    u32 ext_capacity = *(u32*)extensions_block;
+    if(ext_capacity < SALTYSD_MAX_EXTENSIONS)
+        ext_capacity = SALTYSD_MAX_EXTENSIONS;
+
+    char **extensions = malloc(ext_capacity * sizeof(char*));
     for(int i = 0; i < *(u32*)extensions_block; i++)
     {
         u32 offs = *(u32*)(extensions_block + sizeof(u32) + i*sizeof(u32));
@@ -1166,19 +1185,23 @@ void _main(rf_header* header, void *contents)
             level_target++;
         }
         
-        u32 len = 0;
-        for (int i = 0; i < strlen(substr); i++)
+
+        u32 dot = last_index_of(substr, '.');
+        char *file_ext = malloc(SALTYSD_MAX_EXT);
+        //Read whether or not there was a dot; an empty extension is what an
+        //extensionless file matches.
+        file_ext[0] = 0;
+        if(dot != -1 && dot != 0)
         {
-            if (substr[i] == '.')
-               len = i+1;
-        }
-        char *file_ext = malloc(0x10);
-        if(len != -1)
-        {
-            dumb_strcpy(file_ext, &substr[len-1]);
+            //The name is up to SALTYSD_MAX_PATH and this buffer is sixteen
+            //bytes, so a longer suffix is truncated and the file is ignored
+            u32 ext_len = strlen(&substr[dot]);
+            if(ext_len > SALTYSD_MAX_EXT-1)
+                ext_len = SALTYSD_MAX_EXT-1;
         
-            substr[len-1] = 0;
-            seed_len += len-1;
+            dumb_strncpy(file_ext, &substr[dot], ext_len);
+            substr[dot] = 0;
+            seed_len += dot;
         }
 
         //Find our extension ID
@@ -1196,7 +1219,7 @@ void _main(rf_header* header, void *contents)
         }
         
         //New extension...
-        if(ext_num == 0 && len && *(u32*)extensions_block < 0x3E)
+        if(ext_num == 0 && file_ext[0] && *(u32*)extensions_block < SALTYSD_MAX_EXTENSIONS)
         {
             u32 ext_str = string_alloc(&last_str_addr, string_limit, strlen(file_ext));
             char *new_str = blocks[ext_str / 0x2000] + (ext_str & 0x1FFF);
