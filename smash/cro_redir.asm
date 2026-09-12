@@ -4,6 +4,8 @@
 
 .include "common.armips.asm"
 
+SALTYSD_DEBUG equ (0)
+
 LOAD_OBJECT_LIST equ (0x8)
 BUFFER_LOAD_ADDR equ (0x0)
 BUFFER_PPREV equ (0x18)
@@ -146,10 +148,9 @@ new_is_good:
 ; r0=string, r1=CRO
 cro_find_func:
    push {r1-r7, lr}
-      push {r0-r1}
-      mov r1, #0xFF
-      swi 0x3D
-      pop {r0-r1}
+.if SALTYSD_DEBUG
+      bl cro_debug_print
+.endif
       mov r5, r0
       mov r4, r1
       
@@ -183,12 +184,16 @@ cro_list_find_func:
       mov r6, r0
 
 cro_search_loop:
+.if SALTYSD_DEBUG
       push {r0-r1}
          add r0, r5, #BUFFER_CRO_NAME
-         mov r1, #0xFF
-         swi 0x3D
+         bl cro_debug_print
       pop {r0-r1}
+.endif
 
+      ; A node whose CRO is not loaded has no export table, so the answer for
+      ; it is "not here" rather than a read off address zero.
+      mov r0, #0x0
       ldr r1, [r5, #BUFFER_LOAD_ADDR]
       cmp r1, #0x0
       beq cro_search_next
@@ -752,11 +757,12 @@ cro_extend:
    ldr r5, [r0]
 
    ; Debug print
+.if SALTYSD_DEBUG
    push {r0-r1}
       mov r0, r1
-      mov r1, #0xff
-      swi 0x3D
+      bl cro_debug_print
    pop {r0-r1}
+.endif
 
    bx lr
 
@@ -773,11 +779,12 @@ cro_msg_extend:
    pop {r0-r4, lr}
    
    ; Debug print
+.if SALTYSD_DEBUG
    push {r0-r1}
       add r0, r4, #BUFFER_CRO_NAME
-      mov r1, #0xff
-      swi 0x3D
+      bl cro_debug_print
    pop {r0-r1}
+.endif
    
    mov r8, #0x0
    str r8, [r4]
@@ -817,9 +824,10 @@ cro_file_size_intercept:
       beq size_close_and_end
       
       ; Print the string to debug console
+.if SALTYSD_DEBUG
       ldr r0, [sp, #FILE_PATH]
-      mov r1, #0xff
-      swi 0x3D
+      bl cro_debug_print
+.endif
    
       ldr r0, [sp, #FILE_HANDLE]
       bl IFile_Init
@@ -835,9 +843,10 @@ cro_file_size_intercept:
       beq size_close_and_end ; SD file doesn't exist, exit and pretend it never happened.
       
       ; Debug print that we've got a file
-      mov r1, #0xff
+.if SALTYSD_DEBUG
       ldr r0, =meme
-      swi 0x3D
+      bl cro_debug_print
+.endif
       
       ldr r0, [sp, #FILE_HANDLE]
       bl IFile_GetSize
@@ -894,9 +903,10 @@ cro_file_intercept:
       beq close_and_end
       
       ; Print the string to debug console
+.if SALTYSD_DEBUG
       ldr r0, [sp, #FILE_PATH]
-      mov r1, #0xff
-      swi 0x3D
+      bl cro_debug_print
+.endif
    
       ldr r0, [sp, #FILE_HANDLE]
       bl IFile_Init
@@ -909,9 +919,10 @@ cro_file_intercept:
       beq close_and_end ; SD file doesn't exist, exit and pretend it never happened.
       
       ; Debug print that we've got a file
-      mov r1, #0xff
+.if SALTYSD_DEBUG
       ldr r0, =meme2
-      swi 0x3D
+      bl cro_debug_print
+.endif
       
       ldr r0, [sp, #FILE_HANDLE]
       bl IFile_GetSize
@@ -940,6 +951,25 @@ close_and_end:
    pop {r0-r4, lr}
    mov r1, r7
    b cro_file_return
+
+.if SALTYSD_DEBUG
+; svc 0x3D takes the string in r0 and its length in r1. The length is measured
+; here, stopping at the terminator or at 0xFF, so a field that is not a string
+; is still read within the bound the call always had.
+cro_debug_print:
+   push {r0-r3, r12, lr}
+      mov r1, #0x0
+cro_debug_measure:
+      ldrb r2, [r0, r1]
+      cmp r2, #0x0
+      beq cro_debug_emit
+      add r1, r1, #0x1
+      cmp r1, #0xFF
+      bne cro_debug_measure
+cro_debug_emit:
+      swi 0x3D
+   pop {r0-r3, r12, pc}
+.endif
 
 .align 4
 sdmc:       .ascii "sdmc:",0
