@@ -9,6 +9,10 @@
 #define SALTYSD_MAX_MODS       62
 #define SALTYSD_MAX_ROOTS      (SALTYSD_MAX_MODS + 1)
 #define SALTYSD_MAX_MOD_NAME   0x40
+//Work arrays are totals across all roots, not per-mod
+#define SALTYSD_MAX_DIRS       0x1000
+#define SALTYSD_MAX_FILES      0x4000
+#define SALTYSD_MAX_PATH       0x101
 
 #define SALTYSD_CRO_DIR        "cro/"
 #define SALTYSD_BGM_DIR        "sound/bgm/"
@@ -371,9 +375,25 @@ static void report_conflict(saltysd_root *roots, u8 a, u8 b, char *path)
     printf("SaltySD conflict %s: %s and %s", path, roots[a].name, roots[b].name);
 }
 
+#define SALTYSD_NO_STRING 0xFFFFFFFF
+static u32 string_alloc(u32 *cursor, u32 limit, u32 len)
+{
+    u32 at = *cursor;
+    if((at & 0x1FFF) + len >= 0x2000)
+        at = (at + 0x1FFF) & (0xFFFFFFFF - 0x1FFF);
+
+    if(at + len + 1 > limit)
+        return SALTYSD_NO_STRING;
+
+    *cursor = at + len + 1;
+    return at;
+}
+
 void _main(rf_header* header, void *contents)
 {
-    const u32 STRING_SHIFT = sizeof(rf_entry)*0x800;
+    //Room for new entries is carved out once and never grows
+    const u32 ENTRY_RESERVE = 0x800;
+    const u32 STRING_SHIFT = sizeof(rf_entry)*ENTRY_RESERVE;
     const u32 EXT_SHIFT = 0x2000*0x8*sizeof(u8);
     void *string_section_current = contents + (header->stringsection_start - header->contents_start);
     void *string_section_next = string_section_current + STRING_SHIFT;
@@ -500,18 +520,20 @@ void _main(rf_header* header, void *contents)
     //Iterate through every root for every single file
     u32 num_directories = num_roots;
     u32 num_files = 0;
+    u32 dirs_skipped = 0;
+    u32 files_skipped = 0;
     void *dir_entries = malloc(0x40*sizeof(DirectoryEntry));
     void *dir_handle;
     
-    u16 **dirs = malloc(0x1000*sizeof(u16*));
-    u8 *dir_roots = malloc(0x1000*sizeof(u8));
-    char **files = malloc(0x4000*sizeof(char*));
-    u32 *file_sizes = malloc(0x4000*sizeof(u32));
-    u8 *file_roots = malloc(0x4000*sizeof(u8));
+    u16 **dirs = malloc(SALTYSD_MAX_DIRS*sizeof(u16*));
+    u8 *dir_roots = malloc(SALTYSD_MAX_DIRS*sizeof(u8));
+    char **files = malloc(SALTYSD_MAX_FILES*sizeof(char*));
+    u32 *file_sizes = malloc(SALTYSD_MAX_FILES*sizeof(u32));
+    u8 *file_roots = malloc(SALTYSD_MAX_FILES*sizeof(u8));
 
     for(int i = 0; i < num_roots; i++)
     {
-        u16 *root_path = malloc(0x101*sizeof(u16));
+        u16 *root_path = malloc(SALTYSD_MAX_PATH*sizeof(u16));
         dumb_mbstowcs(root_path, roots[i].path);
         dirs[i] = root_path;
         dir_roots[i] = i;
@@ -529,14 +551,24 @@ void _main(rf_header* header, void *contents)
             {
                 num_files_folders = 0;
                 ReadDirectory(&num_files_folders, dir_handle, dir_entries, 0x40);
-
+            
                 for(int j = 0; j < num_files_folders; j++)
                 {
                     DirectoryEntry *dir_entry = dir_entries + j*sizeof(DirectoryEntry);
             
                     if(dir_entry->is_directory)
                     {
-                        u16 *new_dir = malloc(0x101*sizeof(u16));
+                        //Checked before anything is allocated: the queue array
+                        //and the path buffer are both fixed, so a subtree that
+                        //will not fit is left unscanned and counted.
+                        u32 dir_len = dumb_wcslen(dirs[i]) + 1 + dumb_wcslen(dir_entry->path);
+                        if(num_directories >= SALTYSD_MAX_DIRS || dir_len >= SALTYSD_MAX_PATH)
+                        {
+                            dirs_skipped++;
+                            continue;
+                        }
+
+                        u16 *new_dir = malloc(SALTYSD_MAX_PATH*sizeof(u16));
                         new_dir[0] = 0;
 
                         dumb_wcscat(new_dir, dirs[i]);
@@ -548,12 +580,22 @@ void _main(rf_header* header, void *contents)
                     }
                     else
                     {
-                        char *file = malloc(0x101);
+                        u32 root_len = strlen(roots[dir_roots[i]].path) + 1;
+                        u32 rel_len = dumb_wcslen(dir_entry->path);
+                        if(i >= num_roots)
+                            rel_len += dumb_wcslen(dirs[i]) - root_len + 1;
+                    
+                        if(rel_len >= SALTYSD_MAX_PATH)
+                        {
+                            files_skipped++;
+                            continue;
+                        }
+
+                        char *file = malloc(SALTYSD_MAX_PATH);
                         file[0] = 0;
 
                         if(i >= num_roots)
                         {
-                            u32 root_len = strlen(roots[dir_roots[i]].path) + 1;
                             dumb_wcstombs(file, dirs[i]+root_len);
                             dumb_strcat(file, "/");
                         }
@@ -568,7 +610,7 @@ void _main(rf_header* header, void *contents)
                         
                             if(!strcmp(revokenametest, "revoke") && !strcmp(file+strlen(file)-4, ".txt"))
                             {
-                                char *temp_real_path = malloc(0x101);
+                                char *temp_real_path = malloc(0x80 + 1 + SALTYSD_MAX_PATH);
                                 dumb_strcpy(temp_real_path, roots[dir_roots[i]].path);
                                 dumb_strcat(temp_real_path, "/");
                                 dumb_strcat(temp_real_path, file);
@@ -607,6 +649,16 @@ void _main(rf_header* header, void *contents)
                             free(revokenametest);
                         }
                     
+                        //Checked here rather than at the top of the branch: a
+                        //revoke list is read and then dropped without taking a
+                        //slot, and a full array must not stop one being read.
+                        if(num_files >= SALTYSD_MAX_FILES)
+                        {
+                            files_skipped++;
+                            free(file);
+                            continue;
+                        }
+
                         files[num_files] = file;
                         file_sizes[num_files] = dir_entry->file_size & 0xFFFFFFFF;
                         file_roots[num_files] = dir_roots[i];
@@ -623,6 +675,11 @@ void _main(rf_header* header, void *contents)
     
     free(dirs);
     free(dir_entries);
+
+    if(dirs_skipped)
+        printf("SaltySD %x folders left unscanned: no room in the scan", dirs_skipped);
+    if(files_skipped)
+        printf("SaltySD %x files left out of the scan", files_skipped);
     
     //Parse revoked files
     if(revoke_buf)
@@ -830,7 +887,7 @@ void _main(rf_header* header, void *contents)
                     files[j] = NULL;
                 }
             }
-
+                    
             if(winner >= 0)
             {
                 if(!existing_revoked)
@@ -878,8 +935,11 @@ void _main(rf_header* header, void *contents)
             files[j] = NULL;
         }
     }
-    
+
     //Add new files to RF
+    u32 string_limit = block_size * 0x2000;
+    u32 entries_added = 0;
+    u32 entries_skipped = 0;
     last_str_addr = ((*entries)[header->resourceentry_amt-1].string_offs & 0xFFFFF) + 0x80;
     for(int i = 0; i < num_files; i++)
     {
@@ -1005,6 +1065,43 @@ void _main(rf_header* header, void *contents)
         
         printf("adding %x entries after %x (%s)", entries_to_make, entry_to_shift, files[i]+seed_len-strlen(substr));
         
+        char *tail = files[i]+seed_len-strlen(substr);
+        u32 probe = last_str_addr;
+        bool fits = entries_added + entries_to_make <= ENTRY_RESERVE
+                 && header->resourceentry_amt + entries_to_make + SALTYSD_ID_BIAS <= SALTYSD_ID_SPACE;
+
+        for(u32 j = 0; fits && j < entries_to_make; j++)
+        {
+            u32 seg = len_to(tail, '/');
+            //The last component loses its extension before it is written, so
+            //its whole length is an overestimate.
+            u32 seg_len = (seg == -1) ? strlen(tail) : seg-1;
+
+            if(string_alloc(&probe, string_limit, seg_len) == SALTYSD_NO_STRING)
+                fits = false;
+
+            if(seg == -1)
+                break;
+            tail += seg;
+        }
+
+        //And one more string, in case the extension is one the table has not
+        //seen yet, sized by the buffer it is read into.
+        if(fits && string_alloc(&probe, string_limit, 0x10-1) == SALTYSD_NO_STRING)
+            fits = false;
+
+        if(!fits)
+        {
+            printf("SaltySD no room left, dropping %s", files[i]);
+            entries_skipped++;
+            free(substr);
+            free(files[i]);
+            files[i] = NULL;
+            continue;
+        }
+
+        entries_added += entries_to_make;
+        
         if(entry_to_shift != header->resourceentry_amt)
         {
             memmove(&(*entries)[entry_to_shift+entries_to_make], &(*entries)[entry_to_shift], (u32)&(*entries)[header->resourceentry_amt] - (u32)&(*entries)[entry_to_shift]);
@@ -1017,20 +1114,17 @@ void _main(rf_header* header, void *contents)
         //Create all our new folders
         for(int j = 0; j < entries_to_make-1; j++)
         {
-            if((last_str_addr & 0x1FFF) + strlen(substr) >= 0x2000)
-                last_str_addr = (last_str_addr + 0x1FFF) & (0xFFFFFFFF - 0x1FFF);
-        
-            char *new_str = blocks[last_str_addr / 0x2000] + (last_str_addr & 0x1FFF);
+            u32 folder_str = string_alloc(&last_str_addr, string_limit, strlen(substr));
+            char *new_str = blocks[folder_str / 0x2000] + (folder_str & 0x1FFF);
             dumb_strcpy(new_str, substr);
             printf("folder: %s", new_str);
         
             (*entries)[entry_to_shift].chunk_offs = (*entries)[entry_to_shift-1].chunk_offs;
-            (*entries)[entry_to_shift].string_offs = last_str_addr;
+            (*entries)[entry_to_shift].string_offs = folder_str;
             (*entries)[entry_to_shift].comp_size = 0x80;
             (*entries)[entry_to_shift].decomp_size = 0x80;
             (*entries)[entry_to_shift].timestamp = 0;
             (*entries)[entry_to_shift].flags = 0x8000 | 0xA00 | level_target;
-            last_str_addr += strlen(substr)+1;
             header->resourceentry_amt++;
             header->entrysection_size += 0x18;
             entry_to_shift++;
@@ -1082,45 +1176,43 @@ void _main(rf_header* header, void *contents)
         //New extension...
         if(ext_num == 0 && len && *(u32*)extensions_block < 0x3E)
         {
-            if((last_str_addr & 0x1FFF) + strlen(substr) >= 0x2000)
-                last_str_addr = (last_str_addr + 0x1FFF) & (0xFFFFFFFF - 0x1FFF);
-                
-            char *new_str = blocks[last_str_addr / 0x2000] + (last_str_addr & 0x1FFF);
+            u32 ext_str = string_alloc(&last_str_addr, string_limit, strlen(file_ext));
+            char *new_str = blocks[ext_str / 0x2000] + (ext_str & 0x1FFF);
             dumb_strcpy(new_str, file_ext);
             printf("adding ext %s", new_str);
             
-            *(u32*)(extensions_block + sizeof(u32) + *(u32*)extensions_block*sizeof(u32)) = last_str_addr;
+            *(u32*)(extensions_block + sizeof(u32) + *(u32*)extensions_block*sizeof(u32)) = ext_str;
             ext_num = *(u32*)extensions_block;
             extensions[*(u32*)extensions_block] = new_str;
             *(u32*)extensions_block += 1;
-            
-            last_str_addr += strlen(new_str)+1;
         }
         
         free(file_ext);
         
-        if((last_str_addr & 0x1FFF) + strlen(substr) >= 0x2000)
-            last_str_addr = (last_str_addr + 0x1FFF) & (0xFFFFFFFF - 0x1FFF);
-        
-        char *new_str = blocks[last_str_addr / 0x2000] + (last_str_addr & 0x1FFF);
+        u32 file_str = string_alloc(&last_str_addr, string_limit, strlen(substr));
+        char *new_str = blocks[file_str / 0x2000] + (file_str & 0x1FFF);
         dumb_strcpy(new_str, substr);
         
         //Add new file entry
         (*entries)[entry_to_shift].chunk_offs = (*entries)[entry_to_shift-1].chunk_offs;
-        (*entries)[entry_to_shift].string_offs = last_str_addr | ext_num << 24;
+        (*entries)[entry_to_shift].string_offs = file_str | ext_num << 24;
         (*entries)[entry_to_shift].comp_size = file_sizes[i];
         (*entries)[entry_to_shift].decomp_size = file_sizes[i];
         (*entries)[entry_to_shift].timestamp = 0;
         (*entries)[entry_to_shift].flags = 0x8000 | 0xC00 | level_target;
         root_table[entry_to_shift + SALTYSD_ID_BIAS] = file_roots[i] + 1;
-        last_str_addr += strlen(substr)+1;
         header->resourceentry_amt++;
         header->entrysection_size += 0x18;
         
         printf("flags: %x, %s", (*entries)[entry_to_shift].flags, entered_packed ? "entered packed" : "didn't enter packed");
         
+        free(substr);
         free(files[i]);
+        files[i] = NULL;
     }
+
+    if(entries_skipped)
+        printf("SaltySD %x new files dropped: the insertion reserve is full", entries_skipped);
     
     free(full_name);
     free(files);
