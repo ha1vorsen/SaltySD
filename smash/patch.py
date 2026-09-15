@@ -19,6 +19,12 @@ def readbytes(path):
         return open(path, 'r', encoding='latin-1', newline="").read().encode('latin-1')
     except TypeError:
         return open(path, 'rb').read()
+
+def require_match(data, signature, label):
+    address = data.find(signature)
+    if address < 0:
+        raise RuntimeError("Couldn't find %s; refusing to patch this code.bin." % label)
+    return address
         
 rf_sig = b2str([0x02, 0x10, 0xD0, 0xE5, 0x04, 0x00, 0x51, 0xE3, 0x05, 0x00, 0x00, 0x3A, 0x0C, 0x10, 0x90, 0xE5, 0x04, 0x00, 0x90, 0xE5, 0x00, 0x10, 0x41, 0xE0])
 rf_alloc_sig = b2str([0x1C, 0x00, 0x90, 0xE5, 0x7F, 0x00, 0x80, 0xE2, 0x7F, 0x10, 0xC0, 0xE3, 0xE8, 0x06, 0x9D, 0xE5])
@@ -58,12 +64,12 @@ sdbgm = readbytes("bin/sdbgm.bin")
 bgm_str_addr = f.find(bgm_sig)
 bgm_hook_addr = bgm_str_addr + bgm_hook_offs
 
-rf_hook_addr = f.find(rf_sig)
-rf_alloc_addr = f.find(rf_alloc_sig)
-ls_hook_addr = f.find(ls_sig)+4
-ls_alloc_addr = f.find(ls_alloc_sig)
-thread_hook_addr = f.find(thread_sig)
-norm_hook_addr = f.find(norm_sig)
+rf_hook_addr = require_match(f, rf_sig, "resource-file hook")
+rf_alloc_addr = require_match(f, rf_alloc_sig, "resource-file allocation hook")
+ls_hook_addr = require_match(f, ls_sig, "LS hook") + 4
+ls_alloc_addr = require_match(f, ls_alloc_sig, "LS allocation hook")
+thread_hook_addr = require_match(f, thread_sig, "thread loader hook")
+norm_hook_addr = require_match(f, norm_sig, "normal loader hook")
 
 # TODO: Scan for these
 rf_payload_addr = 0xA33000-0x100000
@@ -71,6 +77,15 @@ ls_payload_addr = 0xA36000-0x100000
 thread_payload_addr = 0xA36000-0x100000
 norm_payload_addr = 0xA36800-0x100000
 sdbgm_addr = 0xA36B00-0x100000
+
+def require_payload_fit(payload, address, limit, label):
+    if address < 0 or address + len(payload) > limit:
+        raise RuntimeError("%s payload does not fit in its reserved code.bin range." % label)
+
+require_payload_fit(rf_payload, rf_payload_addr, thread_payload_addr, "resource_mod")
+require_payload_fit(thread_payload, thread_payload_addr, norm_payload_addr, "thread loader")
+require_payload_fit(norm_payload, norm_payload_addr, sdbgm_addr, "normal loader")
+require_payload_fit(sdbgm, sdbgm_addr, len(f), "BGM loader")
 
 # Just convert f to bytes now that we're done searching things.
 try:
