@@ -681,7 +681,7 @@ WEAPON_SPECIALIZER_FUNC equ (WEAPON_SPECIALIZER_SHIFT-0x10)
       
       ldr r0, [sp, #WEAPON_SPECIALIZER_THIS]
       ldr r1, [sp, #WEAPON_SPECIALIZER_ID]
-      ldr r3, [sp, #WEAPON_DATA_FUNC]
+      ldr r3, [sp, #WEAPON_SPECIALIZER_FUNC]
       
       cmp r3, #0x0
       beq weapon_specializer_default
@@ -705,6 +705,7 @@ weapon_specializer_default:
       ldr r0, =weapon_specializer_thing1
 loc_98309C:
       ldr r0, =weapon_specializer_thing2
+      add sp, sp, #WEAPON_SPECIALIZER_SHIFT
    pop {r1-r8, pc}
 
 cro_get_weapon_specializer_str:
