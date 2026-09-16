@@ -14,6 +14,7 @@
 .equ RESOURCE_ID, 0x4
 .equ FILE_SIZE, 0x8
 .equ BYTES_READ, 0xC
+.equ PATH, 0x10
 
 test:
      @ Check RF flags
@@ -47,18 +48,22 @@ test:
          call saltysd_build_prefix
          cmp r0, #0x0
          beq close
-         add r7, r8, #0x20
-         add r7, r7, r0
+         rsb r1, r0, #0x0
+         and r1, r1, #0x3
+         add r1, r1, #0x20
+         add r1, r8, r1
+         str r1, [sp, #PATH]
+         add r7, r1, r0
          
          ldr r1, [sp, #RESOURCE_ID]
          mov r0, r7
          sub r0, r0, #0x4
          call path_str      
 
-         add r0, r8, #0x20
+         ldr r0, [sp, #PATH]
          mov r1, r5
          call saltysd_build_prefix
-         add r7, r8, #0x20
+         ldr r7, [sp, #PATH]
                
          mov r0, r8
          call IFile_Init
