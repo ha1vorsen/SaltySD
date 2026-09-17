@@ -1,9 +1,9 @@
-@ Place at 0x194B94 for 1.1.6
+@ Calls the plugin's thread loader entry, which a bl cannot reach.
 
 .arm
 
 lock_hook:
-    ldr r4, =0xA36000
+    ldr r4, =0x07000108
     blx r4
-    
+
 .pool

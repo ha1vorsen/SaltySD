@@ -2,11 +2,20 @@
 
 These edits redirect the romfs:/dt and romfs:/ls files to load straight from the SD card, allowing for modifications and additions of any file without the need to repack or alter existing archives. SD loaded files take first priority, with update files next followed by the original content. All addresses are found automatically based on the code.bin and the payloads adjusted accordingly. If you are creating a modified update CIA or HANS codebin you must make sure your code.bin is decompressed.
 
+**Smash's SaltySD now ships as a Luma3DS plugin**
+
+Nothing is installed as a `code.ips` any more. Luma applies one IPS per title, so an IPS build meant it was SaltySD or game engine patches, never both. The plugin writes the same changes into the game itself at startup, before the game's first instruction, and the IPS slot stays free.
+
+It also keeps the payloads out of the game's binary. They used to be written over live libpng code; they now live in the plugin.
+
 **Patching Instructions**
 
- * Obtain a code.bin of the desired version of Smash to patch and place it in the same directory as the Makefile.
+ * Use a code.bin of your version of Smash to patch and place it in the same directory as the Makefile.
  * Grab the latest armips from [here](https://buildbot.orphis.net/armips/) and make sure it is in this folder or your PATH.
- * Build with Makefile provided. The code.bin will be scanned and patched to code_saltysd.bin
+ * Build with the Makefile provided, naming the region you are building for: `make TITLE_IDS=000EDF00` (USA), `000EE000` (EUR) or `000B8B00` (JPN). The code.bin is scanned and patched to code_saltysd.bin, and `plugin/saltysd.3gx` is built from the difference.
+ * Install the plugin at `sd:/luma/plugins/<full title ID>/saltysd.3gx`, ie `sd:/luma/plugins/00040000000EDF00/saltysd.3gx`, and enable the plugin loader in Rosalina.
+ * A plugin only loads for the region it was built for, and a build it does not recognise byte for byte is left completely alone, so the game runs vanilla rather than half-patched.
+ * Remove any older SaltySD `code.ips` or `code.bin`. If the game is already patched by one, the plugin will not recognise it and will install nothing. This breaks other SaltySD mods, namely high quality models. This can become a new patch that doesn't bother SaltySD.
 
 **Override Layout**
 
@@ -32,3 +41,4 @@ Caching is no longer used as of SaltySD 0.9
  * This layout is a critical change. Content left directly under `sd:/saltysd/smash/` by an older SaltySD no longer resolves: loose files there are ignored, and a game folder such as `param/` is read as a mod named `param`. Move that content to `sd:/luma/titles/smash/`.
  * Non-update versions (Demo, 1.0.1) have not been tested with SaltySD and are unlikely to work yet, versions past those but under 1.1.3 may not work, but are more likely to work. In addition to this, the Smash Demo does not have SDMC access in it's exheader, so SaltySD would never work with the Demo without a modified version to grant permissions.
  * Creating modified CIAs is not advised, as Citra and Luma CFW both support code.bin override and Luma CFW has support for IPS patching.
+ * The plugin loader gives every plugin 2 MiB, which is its smallest size. On an old 3DS or 2DS that memory comes from the system, not from the game, so it does not cut into what Smash has. On a New 3DS it does come out of the game's share.
