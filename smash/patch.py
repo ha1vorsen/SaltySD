@@ -1,13 +1,13 @@
-import struct, sys, zlib, os
+import struct, sys, zlib, os, re
 def b2str(bytes):
     return "".join(map(chr, bytes))
-    
+
 def r32(data, pos):
     try:
         return struct.unpack('<I', data.encode('latin-1')[pos:pos+4])[0]
     except:
         return struct.unpack('<I', data[pos:pos+4])[0]
-        
+
 def insertreplace(data, to_insert, addr):
     try:
         return data[0:addr] + to_insert + data[addr+len(to_insert):]
@@ -25,7 +25,7 @@ def require_match(data, signature, label):
     if address < 0:
         raise RuntimeError("Couldn't find %s; refusing to patch this code.bin." % label)
     return address
-        
+
 rf_sig = b2str([0x02, 0x10, 0xD0, 0xE5, 0x04, 0x00, 0x51, 0xE3, 0x05, 0x00, 0x00, 0x3A, 0x0C, 0x10, 0x90, 0xE5, 0x04, 0x00, 0x90, 0xE5, 0x00, 0x10, 0x41, 0xE0])
 rf_alloc_sig = b2str([0x1C, 0x00, 0x90, 0xE5, 0x7F, 0x00, 0x80, 0xE2, 0x7F, 0x10, 0xC0, 0xE3, 0xE8, 0x06, 0x9D, 0xE5])
 ls_sig = b2str([0x00, 0x50, 0xA0, 0xE1, 0x44, 0x00, 0x9D, 0xE5, 0x00, 0x40, 0xA0, 0xE3, 0x00, 0x00, 0x50, 0xE3])
@@ -34,14 +34,22 @@ thread_sig = b2str([0x08, 0xD0, 0x4D, 0xE2, 0x00, 0x60, 0xA0, 0xE1, 0x04, 0x00, 
 norm_sig = b2str([0x05, 0x20, 0xA0, 0xE1, 0x07, 0x10, 0xA0, 0xE1, 0x06, 0x00, 0xA0, 0xE1, 0x03, 0x00, 0x00, 0x9A])
 bgm_sig = "%s/snd_bgm_%s.nus3bank"
 
-# function's epilogue, both replayed by sdbgm.asm and checked before anything is
-# written. Hooking after the track name resolves, rather than overwriting one of
-# the three base pointers, keeps the rom:/patch tier and allows more than one
-# directory.
 bgm_site = [0xe1a03000, 0xe59f20b0, 0xe28f10b0, 0xe1a00005]
 bgm_tail = [0xe28dd008, 0xe8bd8070]
 bgm_hook_offs = -0xC0
 bgm_tail_offs = 0x8C
+
+# Code the hooks reach with a bl or a b lives in the dead per-fighter stub array.
+ISLAND_OFFS = 0x3C4
+ISLAND_SIZE = 0x400
+ISLAND_SDBGM = 0x1E0
+
+def island_base():
+    src = open('common.armips.asm', encoding='latin-1').read()
+    match = re.search(r"cro_fighter_new equ \((0x[0-9a-fA-F]+)", src)
+    if not match:
+        raise RuntimeError("common.armips.asm has no cro_fighter_new; run scan.py first.")
+    return int(match.group(1), 16) - 0x100000 + ISLAND_OFFS
 
 #Make this compatible with Python 2 and 3
 try:
@@ -50,16 +58,12 @@ except TypeError:
     f = open(sys.argv[1], 'rb').read()
 
 rf_alloc = readbytes("bin/incalloc.bin")
-rf_hook = readbytes("bin/hookresource.bin") 
+rf_hook = readbytes("bin/hookresource.bin")
 #ls_alloc = readbytes("bin/inclsalloc.bin")
-#ls_hook = readbytes("bin/hookls.bin")   
+#ls_hook = readbytes("bin/hookls.bin")
 thread_hook = readbytes("bin/hookthread.bin")
 norm_hook = readbytes("bin/hooknorm.bin")
-rf_payload= readbytes("resource_mod/resource_mod.bin")
-#ls_payload= readbytes("ls_mod/ls_mod.bin")  
-thread_payload = readbytes("bin/threadload.bin")
-norm_payload = readbytes("bin/normload.bin")
-sdbgm = readbytes("bin/sdbgm.bin")
+sdbgm = readbytes("bin/island_sdbgm.bin")
 
 bgm_str_addr = f.find(bgm_sig)
 bgm_hook_addr = bgm_str_addr + bgm_hook_offs
@@ -71,21 +75,10 @@ ls_alloc_addr = require_match(f, ls_alloc_sig, "LS allocation hook")
 thread_hook_addr = require_match(f, thread_sig, "thread loader hook")
 norm_hook_addr = require_match(f, norm_sig, "normal loader hook")
 
-# TODO: Scan for these
-rf_payload_addr = 0xA33000-0x100000
-ls_payload_addr = 0xA36000-0x100000
-thread_payload_addr = 0xA36000-0x100000
-norm_payload_addr = 0xA36800-0x100000
-sdbgm_addr = 0xA36B00-0x100000
+sdbgm_addr = island_base() + ISLAND_SDBGM
 
-def require_payload_fit(payload, address, limit, label):
-    if address < 0 or address + len(payload) > limit:
-        raise RuntimeError("%s payload does not fit in its reserved code.bin range." % label)
-
-require_payload_fit(rf_payload, rf_payload_addr, thread_payload_addr, "resource_mod")
-require_payload_fit(thread_payload, thread_payload_addr, norm_payload_addr, "thread loader")
-require_payload_fit(norm_payload, norm_payload_addr, sdbgm_addr, "normal loader")
-require_payload_fit(sdbgm, sdbgm_addr, len(f), "BGM loader")
+if ISLAND_SDBGM + len(sdbgm) > ISLAND_SIZE:
+    raise RuntimeError("The BGM payload does not fit in the island.")
 
 # Just convert f to bytes now that we're done searching things.
 try:
@@ -108,24 +101,20 @@ if r32(f, norm_hook_addr-0x58+3) & 0xFF != 0x9A:
 
 f = insertreplace(f,b2str([0xEA]),norm_hook_addr-0x58+3)
 
-f = insertreplace(f,rf_payload,rf_payload_addr)
-#f = insertreplace(f,ls_payload,ls_payload_addr)
-f = insertreplace(f,thread_payload,thread_payload_addr)
-f = insertreplace(f,norm_payload,norm_payload_addr)
 f = insertreplace(f,sdbgm,sdbgm_addr)
 
 def words_match(addr, words):
     return all(r32(f, addr + i*4) == word for i, word in enumerate(words))
 
-# A version whose path builder isn't the one sdbgm.asm was written against loses
-# BGM override rather than taking a branch into the middle of something else.
-# Pre-update versions (1.0.1, Demo) land here too.
+# A version whose path builder isn't the one island_sdbgm.s was written against
+# loses BGM override rather than taking a branch into the middle of something
+# else. Pre-update versions (1.0.1, Demo) land here too.
 if(bgm_str_addr < 0 or not words_match(bgm_hook_addr, bgm_site)
    or not words_match(bgm_hook_addr+bgm_tail_offs, bgm_tail)):
     print("The BGM path builder isn't the one this hook was written against.\nSound override is not supported with this version.")
     w.write(f)
     exit(0)
-    
+
 bl_offs = ((sdbgm_addr - bgm_hook_addr) - 0x8) >> 2
 f = insertreplace(f,struct.pack('<I', 0xEB000000 | (bl_offs & 0xFFFFFF)),bgm_hook_addr)
 w.write(f)

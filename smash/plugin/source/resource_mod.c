@@ -1,6 +1,16 @@
-#include <3ds.h>
+typedef unsigned char      u8;
+typedef unsigned short     u16;
+typedef unsigned int       u32;
+typedef unsigned long long u64;
+typedef signed int         s32;
+typedef unsigned int       size_t;
+typedef int                bool;
+#define true  1
+#define false 0
+#define NULL  ((void *)0)
+
 #include <stdarg.h>
-#include "../../common.h"
+#include "common.h"
 
 #define SALTYSD_LOOSE_ROOT     "sd:/luma/titles/smash"
 #define SALTYSD_SD_LOOSE_ROOT  "sdmc:/luma/titles/smash/"
