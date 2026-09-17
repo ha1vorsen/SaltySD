@@ -15,9 +15,10 @@ CRO_CODE_START equ (0xB0)
 CRO_NAMED_EXPORT_PTR equ (0xD0)
 CRO_NAMED_EXPORT_NUM equ (0xD4)
 
-; Entry table at the head of the resource_mod payload. Slot 2 answers which mod
-; folder supplies a file in a channel with no resource id.
-saltysd_build_named_path equ (0xa33008)
+; Slot 5 of the plugin's entry table answers which mod folder supplies a file.
+saltysd_build_named_path equ (0x07000114)
+
+saltysd_island equ (cro_fighter_new+0x3C4)
 SALTYSD_KIND_CRO equ (0x0)
 
 ; Expand the CRO load object to 8 from 4
@@ -773,7 +774,7 @@ chr_weapon_specializer_format: .ascii "_ZN3app%uget_weapon_specializer_%s_%sEv",
 
 
 
-.org 0xA36C00
+.org saltysd_island
 
 ; Keep a pointer to our string in r8 for later
 cro_extend:

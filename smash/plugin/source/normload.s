@@ -1,3 +1,5 @@
+@ Reached from the thunk over the normal-load hook site.
+
 .arm
 
 .macro call func
@@ -6,9 +8,9 @@
 .endm
 
 .include "common.asm"
-.equ base_addr,     0xA36000
+.equ base_addr,     0x0
 
-.equ saltysd_build_prefix,  0xA33004
+.equ saltysd_build_prefix,  0x07000110
 
 .equ TO_LOAD, 0x0
 .equ RESOURCE_ID, 0x4
@@ -16,26 +18,31 @@
 .equ BYTES_READ, 0xC
 .equ PATH, 0x10
 
-test:
-     @Compensate for removing code
-     sub sp, sp, #0x8
-     mov r6, r0
-     ldr r0, [r2, #0x4]
-     
+.section .text.normload, "ax"
+.global saltysd_normload
+.type saltysd_normload, %function
+saltysd_normload:
      @ Check RF flags
      push {r0-r6,lr}
+        ldr r0, [r4, #0x4]
         call get_rf_struct
         ldr r0, [r0, #0x8]
         tst r0, #0x8000 @ does this file have an SD override?
      pop {r0-r6,lr}
      bne exit
+
+     @ Stash to-load address
+     push {r0-r6,lr}
+         ldr r0, [r8, #0x1C]
+         call crit_enter
+     pop  {r0-r6,lr}
      
      push {r0-r8,lr}
          sub sp, sp, #0x20
-         str r1, [sp, #TO_LOAD] @ Stash to-load address
-         str r2, [sp, #RESOURCE_ID]
+         str r6, [sp, #TO_LOAD]
+         str r4, [sp, #RESOURCE_ID]
          
-         ldrh r5, [r2]
+         ldrh r5, [r4]
 
          ldr r0, =0x404
          call liballoc
@@ -57,8 +64,8 @@ test:
          ldr r1, [sp, #RESOURCE_ID]
          mov r0, r7
          sub r0, r0, #0x4
-         call path_str
-                  
+         call path_str      
+
          ldr r0, [sp, #PATH]
          mov r1, r5
          call saltysd_build_prefix
@@ -80,7 +87,8 @@ test:
          mov r0, r8
          call IFile_GetSize
          str r0, [sp, #FILE_SIZE]
-         
+
+         @ Read in our file            
          ldr r1, [sp, #TO_LOAD] @dst
          ldr r2, [sp, #FILE_SIZE] @size
          add r3, sp, #BYTES_READ @bytes_read
@@ -94,6 +102,11 @@ end_read_sd:
          add sp, sp, #0x20
      pop  {r0-r8,lr}
      
+     push {r0-r6,lr}
+         ldr r0, [r8, #0x1C]
+         call crit_leave
+     pop  {r0-r6,lr}
+     
      b skip
      
 close_and_end:
@@ -105,15 +118,24 @@ close:
      add sp, sp, #0x20
      pop  {r0-r8,lr}
      
+     push {r0-r6,lr}
+         ldr r0, [r8, #0x1C]
+         call crit_leave
+     pop  {r0-r6,lr}
+     
 exit:
+     cmp r7, r0
+     mov r2, r5
+     mov r1, r7
+     mov r0, r6
      add lr, lr, #0x4
      bx lr
      
 skip:
-    add sp, sp, #0x8
-    pop {r4-r8,lr}
-    
-skip_end:
+    mov r2, r5
+    mov r1, r7
+    mov r0, r6
+    add lr, lr, #0x14
     bx lr
     
 .pool

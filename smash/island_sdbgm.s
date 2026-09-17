@@ -1,5 +1,4 @@
-@ BGM override. Place at 0xA36B00 and reach it with a bl from the point in the
-@ game's BGM path builder where the track name has just been resolved.
+@ BGM override. Lives in the island, reached with a bl once the track name resolves.
 @
 @ That function tries rex:, then rom:/patch, then rom:. Asking the payload
 @ instead of overwriting the first base pointer leaves all three stock tiers
@@ -11,7 +10,7 @@
 
 .arm
 
-.equ saltysd_build_named_path,  0xA33008
+.equ saltysd_build_named_path,  0x07000114
 .equ SALTYSD_KIND_BGM,          0x1
 .equ BGM_PATH_SIZE,             0x100
 
