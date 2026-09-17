@@ -108,6 +108,8 @@ static u32 (*IFile_Read)(void *handle, void *dest, size_t size, u32 *bytes_read)
 static u32 (*IFile_GetSize)(void *handle) = (void*)IFile_GetSize_ADDR;
 static u32 (*IFile_Close)(void *handle) = (void*)IFile_Close_ADDR;
 
+static u16* (*get_rf_struct)(u32 *id) = (void*)get_rf_struct_ADDR;
+
 static void* (*crit_this)(void) = (void*)crit_this_ADDR;
 static void* (*crit_init)(void* crit_inst) = (void*)crit_init_ADDR;
 static u32 (*mount_sdmc)(char *mount_path) = (void*)mount_sdmc_ADDR;
@@ -322,6 +324,17 @@ u32 saltysd_build_prefix(char *out, u32 id)
     saltysd_map *map = saltysd_get_map();
     if(!map)
         return 0;
+
+    id &= 0xFFFF;
+    for(int i = 0; i < 4 && id; i++)
+    {
+        u32 lookup = id;
+        u16 source = *get_rf_struct(&lookup);
+        if(!source || source == id)
+            break;
+
+        id = source;
+    }
 
     u32 root = map->root_of[id & (SALTYSD_ID_SPACE-1)];
     if(!root || root > map->num_roots)
