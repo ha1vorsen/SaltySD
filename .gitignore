@@ -17,3 +17,6 @@
 /smash/common.asm
 /smash/common.armips.asm
 /smash/common.h
+
+# helpers
+*.ps1
