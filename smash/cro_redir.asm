@@ -234,10 +234,11 @@ get_proj_new:
       ldr r0, =projectile_table_ptr
       ldr r0, [r0]
       ldr r0, [r0, r5, lsl #2]
+      bl get_weapon_class_name
       mov r4, r0 ; projectile
       bl strlen
       mov r6, r0
-      
+
       ldr r0, =projectile_prefix_table_ptr
       ldr r0, [r0]
       ldr r0, [r0, r5, lsl #2]
@@ -299,10 +300,11 @@ get_proj_size:
       ldr r0, =projectile_table_ptr
       ldr r0, [r0]
       ldr r0, [r0, r5, lsl #2]
+      bl get_weapon_class_name
       mov r4, r0 ; projectile
       bl strlen
       mov r6, r0
-      
+
       ldr r0, =projectile_prefix_table_ptr
       ldr r0, [r0]
       ldr r0, [r0, r5, lsl #2]
@@ -344,6 +346,17 @@ get_chr_size:
 
       mov r0, r7
    pop {r1-r7, pc}
+
+; r0=table name, r5=ID
+get_weapon_class_name:
+   push {r1, lr}
+      ldr r1, =#346
+      cmp r5, r1
+      ldreq r0, =samus_gbeamall
+      ldr r1, =#371
+      cmp r5, r1
+      ldreq r0, =lucas_himohebiall
+   pop {r1, pc}
 
 .align 4
 chr_new_format: .ascii "_Z%uNew%sPv",0
