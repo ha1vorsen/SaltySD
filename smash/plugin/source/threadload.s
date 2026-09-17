@@ -1,3 +1,5 @@
+@ Reached from the thunk over the thread hook site.
+
 .arm
 
 .macro call func
@@ -6,9 +8,9 @@
 .endm
 
 .include "common.asm"
-.equ base_addr,     0xA36000
+.equ base_addr,     0x0
 
-.equ saltysd_build_prefix,  0xA33004
+.equ saltysd_build_prefix,  0x07000110
 
 .equ TO_LOAD, 0x0
 .equ RESOURCE_ID, 0x4
@@ -16,7 +18,10 @@
 .equ BYTES_READ, 0xC
 .equ PATH, 0x10
 
-test:
+.section .text.threadload, "ax"
+.global saltysd_threadload
+.type saltysd_threadload, %function
+saltysd_threadload:
      @Compensate for removing code
      sub sp, sp, #0x8
      mov r6, r0

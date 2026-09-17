@@ -1,0 +1,14 @@
+{
+  "author": "ShinyQuagsire, Halvorsen",
+  "title": "SaltySD",
+  "summary": "LayeredFS-inspired file replacement for Super Smash Bros. for Nintendo 3DS",
+  "description": "Loads game file from sdmc:/luma/titles/smash/* and sdmc:/saltysd/smash/(examplemod)/*. * represents the game root.",
+  "version": 66304,
+  "memoryRegion": "2MiB",
+  "compatibility": "both",
+  "swapNotNeeded": false,
+  "eventsSelfManaged": true,
+  "targets": [
+    "0x000EDF00"
+  ]
+}

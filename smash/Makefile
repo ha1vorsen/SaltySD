@@ -9,12 +9,13 @@ endif
 include $(DEVKITARM)/ds_rules
 export LD	:=	$(CC)
 
+TITLE_IDS ?= 000EDF00
+
 .PHONY: assemble all clean
 
-all: 
+all:
 	@mkdir -p bin
 	@python scan.py code.bin
-	@cd resource_mod && $(MAKE)
 	@$(AS) "resource_mod/hookresource.asm"
 	@$(OBJCOPY) -O binary a.out "bin/hookresource.bin"
 	@rm a.out
@@ -27,18 +28,14 @@ all:
 	@$(AS) "hooknorm.asm"
 	@$(OBJCOPY) -O binary a.out "bin/hooknorm.bin"
 	@rm a.out
-	@$(AS) "threadload.asm"
-	@$(OBJCOPY) -O binary a.out "bin/threadload.bin"
-	@rm a.out
-	@$(AS) "normload.asm"
-	@$(OBJCOPY) -O binary a.out "bin/normload.bin"
-	@rm a.out
-	@$(AS) "sdbgm.asm"
-	@$(OBJCOPY) -O binary a.out "bin/sdbgm.bin"
+	@$(AS) "island_sdbgm.s"
+	@$(OBJCOPY) -O binary a.out "bin/island_sdbgm.bin"
 	@rm a.out
 	@python patch.py code.bin
 	@armips cro_redir.asm
+	@python tools/check_island.py code.bin code_saltysd.bin
+	@$(MAKE) --no-print-directory -C plugin TITLE_IDS="$(TITLE_IDS)"
 
 clean:
 	@rm -R bin
-	@cd resource_mod && $(MAKE) clean
+	@$(MAKE) --no-print-directory -C plugin clean
