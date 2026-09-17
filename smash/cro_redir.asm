@@ -187,6 +187,10 @@ cro_list_find_func:
       mov r5, r1
       mov r6, r0
 
+      mov r0, #0x0
+      cmp r5, #0x0
+      beq cro_found
+
 cro_search_loop:
 .if SALTYSD_DEBUG
       push {r0-r1}
