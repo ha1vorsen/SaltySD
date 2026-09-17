@@ -76,6 +76,7 @@ cro_sarc_skip:
       mov r4, r0
       ldrb r0, [r4, #0x2B0] ; get type
       cmp r0, #0x1
+      movgt r0, #0x0 ; only fighters and weapons have CRO objects
       bgt failed
    
       ldr r0, =cro_load_object
@@ -156,6 +157,9 @@ cro_find_func:
       
       ldr r6, [r4, #CRO_NAMED_EXPORT_PTR]
       ldr r7, [r4, #CRO_NAMED_EXPORT_NUM]
+      cmp r7, #0x0
+      moveq r0, #0x0
+      beq symbol_success
 
 symbol_loop:
       ldr r0, [r6, #0x0]
@@ -538,10 +542,10 @@ get_weapon_proj_name:
       ldr r4, =#346
       cmp r5, r4
       ldreq r0, =samus_gbeamall
-      ldr r4, =#370
+      ldr r4, =#371
       cmp r5, r4
       ldreq r0, =lucas_himohebiall
-      ldr r4, =#373
+      ldr r4, =#374
       cmp r5, r4
       ldreq r0, =roy_sword
    pop {r4-r5, pc}
