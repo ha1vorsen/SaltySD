@@ -2,8 +2,8 @@
 #include <stdarg.h>
 #include "../../common.h"
 
-#define SALTYSD_LOOSE_ROOT     "sd:/luma/titles/crs"
-#define SALTYSD_SD_LOOSE_ROOT  "sdmc:/luma/titles/crs/"
+#define SALTYSD_LOOSE_ROOT     "sd:/luma/titles/smash"
+#define SALTYSD_SD_LOOSE_ROOT  "sdmc:/luma/titles/smash/"
 #define SALTYSD_MOD_ROOT       "sd:/saltysd/smash"
 #define SALTYSD_SD_MOD_ROOT    "sdmc:/saltysd/smash/"
 #define SALTYSD_MAX_MODS       62
@@ -258,6 +258,16 @@ u32 last_index_of(char *str, char chr)
             found = i;
     }
     return found;
+}
+
+//String table entries sit at any byte offset, so a reference word is copied
+//out rather than read through a u16 pointer that may be misaligned. Shifting
+//the two bytes together does not work: the compiler merges them into an ldrh.
+u16 read_u16le(char *str)
+{
+    u16 value;
+    memcpy(&value, str, sizeof(value));
+    return value;
 }
 
 u32 count_chars(char *str, char chr)
@@ -897,7 +907,7 @@ void _main(rf_header* header, void *contents)
 
         if(string_offset_all & 0x00800000)
         {
-            u16 reference = *(u16*)string;
+            u16 reference = read_u16le(string);
             u32 ref_len = (reference & 0x1f) + 4;
             u32 ref_reloff = (reference & 0xe0) >> 6 << 8 | (reference >> 8);
             u32 final_offset = string_offset - ref_reloff;
@@ -1093,7 +1103,7 @@ void _main(rf_header* header, void *contents)
 
             if(string_offset_all & 0x00800000)
             {
-                u16 reference = *(u16*)string;
+                u16 reference = read_u16le(string);
                 u32 ref_len = (reference & 0x1f) + 4;
                 u32 ref_reloff = (reference & 0xe0) >> 6 << 8 | (reference >> 8);
                 u32 final_offset = string_offset - ref_reloff;
