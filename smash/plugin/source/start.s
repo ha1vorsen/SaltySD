@@ -13,6 +13,8 @@ _start:
     b       saltysd_normload
     b       saltysd_build_prefix
     b       saltysd_build_named_path
+    b       saltysd_cro_loaded
+    b       saltysd_menu_hook
 
 plugin_start:
     push    {r0-r11, lr}
