@@ -48,6 +48,7 @@ bgm_tail_offs = 0x8C
 ISLAND_OFFS = 0x3C4
 ISLAND_SIZE = 0x400
 ISLAND_SDBGM = 0x1E0
+ISLAND_HOOKS = 0x220
 
 def island_base():
     src = open('common.armips.asm', encoding='latin-1').read()
@@ -82,7 +83,7 @@ norm_hook_addr = require_match(f, norm_sig, "normal loader hook")
 
 sdbgm_addr = island_base() + ISLAND_SDBGM
 
-if ISLAND_SDBGM + len(sdbgm) > ISLAND_SIZE:
+if ISLAND_SDBGM + len(sdbgm) > ISLAND_HOOKS:
     raise RuntimeError("The BGM payload does not fit in the island.")
 
 # Just convert f to bytes now that we're done searching things.

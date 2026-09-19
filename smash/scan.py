@@ -63,6 +63,18 @@ weapon_data_default_sig = b2str([0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 weapon_specializer_default_sig = b2str([0x38, 0x00, 0x9F, 0xE5, 0x00, 0x00, 0x90, 0xE5, 0x01, 0x00, 0x10, 0xE3])
 weapon_specializer_thing4_sig = b2str([0x01, 0x68, 0x00, 0x29, 0x01, 0xD0, 0x00, 0x20])
 
+gsp_state_sig = b2str([0x04, 0x00, 0x9F, 0xE5, 0xD2, 0x00, 0xD0, 0xE1, 0x1E, 0xFF, 0x2F, 0xE1])
+gsp_state_tail = b2str([0x04, 0x00, 0x9F, 0xE5, 0x1C, 0x00, 0x90, 0xE5, 0x1E, 0xFF, 0x2F, 0xE1])
+hid_object_sig = b2str([0x08, 0x00, 0x9F, 0xE5, 0x08, 0x10, 0x90, 0xE5, 0x04, 0x00, 0x9F, 0xE5])
+
+def find_gsp_state():
+    at = f.find(gsp_state_sig)
+    while at != -1:
+        if f[at+0x10:at+0x1C] == gsp_state_tail:
+            return r32(f, at+0xC)
+        at = f.find(gsp_state_sig, at+1)
+    return 0
+
 # Make this compatible with Python 2 and 3
 try:
     f = open(sys.argv[1], 'r', encoding='latin-1', newline="").read()
@@ -218,6 +230,9 @@ print("#define crit_leave_ADDR " + hex(f.find(crit_leave_sig)+0x100000), file=co
 print("#define crc_ADDR " + hex(f.find(crc_sig)+0x100000), file=common)
 print("#define vsnprintf_ADDR " + hex(f.find(vsnprintf_sig)+0x100000+1), file=common)
 print("#define get_rf_struct_ADDR " + hex(f.find(get_rf_struct_sig)+0x100000), file=common)
+print("#define cro_fighter_new_ADDR " + hex(f.find(cro_fighter_new_sig)+0x100000), file=common)
+print("#define gsp_state_ADDR " + hex(find_gsp_state()), file=common)
+print("#define hid_object_ADDR " + hex(r32(f, f.find(hid_object_sig)+0x14)), file=common)
 if(r32(f,f.find(path_str_sig)-4) == 0x0):
     print("#define something_resource_lock_ADDR " + hex(r32(f,f.find(path_str_sig)-8)) + "\n", file=common)
 else:

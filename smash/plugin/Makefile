@@ -69,8 +69,8 @@ define check_entry_table
 	 after=`$(NM) $(TARGET).elf | grep -i " t plugin_start$$" | cut -d' ' -f1`; \
 	 status=`$(NM) $(TARGET).elf | grep -i " [DdBb] saltysd_status$$" | cut -d' ' -f1`; \
 	 test "$$start" = "07000100" || { echo "_start is at 0x$$start, expected 0x07000100"; exit 1; }; \
-	 test "$$after" = "07000118" || { echo "the entry table is not six words (plugin_start at 0x$$after)"; exit 1; }; \
-	 echo "entry table 0x07000100-0x07000117 ok, status word at 0x$$status"
+	 test "$$after" = "07000120" || { echo "the entry table is not eight words (plugin_start at 0x$$after)"; exit 1; }; \
+	 echo "entry table 0x07000100-0x0700011F ok, status word at 0x$$status"
 endef
 
 $(TARGET).elf: $(OFILES) 3gx.ld
