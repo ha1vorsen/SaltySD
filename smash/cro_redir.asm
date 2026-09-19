@@ -1003,4 +1003,18 @@ meme2: .ascii "file override",0
 
 .pool
 
+.org cro_post_hook_loc
+   bl saltysd_cro_post
+.org cro_post_hook_loc_2
+   bl saltysd_cro_post
+
+.org saltysd_island+0x220
+saltysd_cro_post:
+   mov r0, r4
+   .word 0xE51FF004
+   .word 0x07000118
+saltysd_menu_tramp:
+   .word 0xE51FF004
+   .word 0x0700011C
+
 .Close

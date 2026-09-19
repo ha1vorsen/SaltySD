@@ -16,6 +16,7 @@ typedef int                bool;
 #define SALTYSD_SD_LOOSE_ROOT  "sdmc:/luma/titles/smash/"
 #define SALTYSD_MOD_ROOT       "sd:/saltysd/smash"
 #define SALTYSD_SD_MOD_ROOT    "sdmc:/saltysd/smash/"
+#define SALTYSD_DISABLED_MARKER "is.disabled"
 #define SALTYSD_MAX_MODS       62
 #define SALTYSD_MAX_ROOTS      (SALTYSD_MAX_MODS + 1)
 #define SALTYSD_MAX_MOD_NAME   0x40
@@ -412,9 +413,16 @@ u32 saltysd_build_named_path(char *out, u32 out_size, u32 kind, char *name)
     return prefix_len + key_len;
 }
 
-static void saltysd_mod_config(saltysd_root *mod)
+static void saltysd_mod_config(saltysd_root *mod, void *ifile_handle)
 {
-    mod->enabled = 1;
+    char marker[0x80 + sizeof("/" SALTYSD_DISABLED_MARKER)];
+    dumb_strcpy(marker, mod->path);
+    dumb_strcat(marker, "/" SALTYSD_DISABLED_MARKER);
+
+    IFile_Init(ifile_handle);
+    mod->enabled = !IFile_Open(ifile_handle, marker, 1);
+    if(!mod->enabled)
+        IFile_Close(ifile_handle);
 }
 
 static void report_conflict(saltysd_root *roots, u8 a, u8 b, char *path)
@@ -545,7 +553,7 @@ void _main(rf_header* header, void *contents)
                     dumb_strcat(mod_root_rec.prefix, mod_root_rec.name);
                     dumb_strcat(mod_root_rec.prefix, "/");
 
-                    saltysd_mod_config(&mod_root_rec);
+                    saltysd_mod_config(&mod_root_rec, ifile_handle);
                     if(!mod_root_rec.enabled)
                     {
                         printf("SaltySD mod disabled %s", mod_root_rec.name);

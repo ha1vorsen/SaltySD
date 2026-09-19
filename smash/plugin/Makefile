@@ -24,17 +24,32 @@ PATCHED  ?= $(CURDIR)/../code_saltysd.bin
 ARCH    := -marm -march=armv6k -mtune=mpcore -mfloat-abi=hard
 # -O2 is what resource_mod has always been built with.
 CFLAGS  := $(ARCH) -std=gnu11 -O2 -Wall -fomit-frame-pointer -ffunction-sections \
-           -fdata-sections -fno-builtin -ffreestanding -fno-strict-aliasing -I.. -Isource
+           -fdata-sections -fno-builtin -ffreestanding -fno-strict-aliasing -I.. -Isource \
+           -Isource/monocypher
 ASFLAGS := $(ARCH) -x assembler-with-cpp -Wa,-I,..
+CFLAGS  += -DSALTYSD_TITLE_ID=0x$(firstword $(TITLE_IDS))
+ifeq ($(UPDATE_TEST),1)
+CFLAGS  += -DSALTYSD_UPDATE_TEST
+TARGET  := saltysd-TEST
+endif
+ifneq ($(VERSION),)
+ifeq ($(shell echo "$(VERSION)" | grep -E "^[0-9]+\.[0-9]+\.[0-9]+$$"),)
+$(error VERSION must look like X.Y.Z)
+endif
+endif
+COMMIT  := $(shell git describe --always --dirty --abbrev=7)
+CFLAGS  += -I$(BUILD)
 LDFLAGS := $(ARCH) -T 3gx.ld -nostdlib -nostartfiles \
            -Wl,--gc-sections,--strip-discarded,-Map,$(BUILD)/$(TARGET).map
 
 CFILES  := $(wildcard $(SOURCES)/*.c)
+VENDOR  := $(wildcard $(SOURCES)/monocypher/*.c)
 SFILES  := $(wildcard $(SOURCES)/*.s)
 OFILES  := $(patsubst $(SOURCES)/%.s,$(BUILD)/%.o,$(SFILES)) \
-           $(patsubst $(SOURCES)/%.c,$(BUILD)/%.o,$(CFILES))
+           $(patsubst $(SOURCES)/%.c,$(BUILD)/%.o,$(CFILES)) \
+           $(patsubst $(SOURCES)/monocypher/%.c,$(BUILD)/%.o,$(VENDOR))
 
-.PHONY: all clean patches verify
+.PHONY: all clean patches verify FORCE
 
 all: $(TARGET).3gx
 
@@ -55,11 +70,25 @@ patches:
 
 $(OFILES): | patches $(BUILD)
 
+$(BUILD)/buildinfo.h: FORCE | $(BUILD)
+ifneq ($(VERSION),)
+	@echo '#define SALTYSD_VERSION "$(VERSION)"' > $@
+else
+	@test -n "$(COMMIT)" || { echo "no git commit to name this dirty build"; exit 1; }
+	@echo '#define SALTYSD_COMMIT "$(COMMIT)"' > $@
+endif
+
+$(BUILD)/host_menu.o $(BUILD)/update.o: $(BUILD)/buildinfo.h
+
 $(BUILD)/%.o: $(SOURCES)/%.s
 	@echo "as  $<"
 	@$(AS) $(ASFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: $(SOURCES)/%.c
+	@echo "cc  $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/%.o: $(SOURCES)/monocypher/%.c
 	@echo "cc  $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
@@ -69,8 +98,8 @@ define check_entry_table
 	 after=`$(NM) $(TARGET).elf | grep -i " t plugin_start$$" | cut -d' ' -f1`; \
 	 status=`$(NM) $(TARGET).elf | grep -i " [DdBb] saltysd_status$$" | cut -d' ' -f1`; \
 	 test "$$start" = "07000100" || { echo "_start is at 0x$$start, expected 0x07000100"; exit 1; }; \
-	 test "$$after" = "07000118" || { echo "the entry table is not six words (plugin_start at 0x$$after)"; exit 1; }; \
-	 echo "entry table 0x07000100-0x07000117 ok, status word at 0x$$status"
+	 test "$$after" = "07000120" || { echo "the entry table is not eight words (plugin_start at 0x$$after)"; exit 1; }; \
+	 echo "entry table 0x07000100-0x0700011F ok, status word at 0x$$status"
 endef
 
 $(TARGET).elf: $(OFILES) 3gx.ld
