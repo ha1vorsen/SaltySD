@@ -1,0 +1,17 @@
+#ifndef SALTYSD_VERSION_H
+#define SALTYSD_VERSION_H
+
+#include "buildinfo.h"
+
+#define CHANNEL_STABLE 0
+#define CHANNEL_DIRTY  1
+
+#ifdef SALTYSD_VERSION
+#define SALTYSD_IS_DIRTY 0
+#define SALTYSD_IDENTITY SALTYSD_VERSION
+#else
+#define SALTYSD_IS_DIRTY 1
+#define SALTYSD_IDENTITY SALTYSD_COMMIT
+#endif
+
+#endif

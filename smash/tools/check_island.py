@@ -11,6 +11,8 @@ LIBPNG_LO, LIBPNG_HI = 0xA33000, 0xA37000
 ISLAND_OFFS = 0x3C4
 ISLAND_SIZE = 0x400
 ISLAND_SDBGM = 0x1E0
+ISLAND_HOOKS = 0x220
+ISLAND_HOOKS_SIZE = 0x14
 
 
 def island_base():
@@ -38,7 +40,15 @@ def main():
             f"0x{ISLAND_SDBGM:X} and overwritten it."
         )
 
-    end = ISLAND_SDBGM + len(sdbgm)
+    if ISLAND_SDBGM + len(sdbgm) > ISLAND_HOOKS:
+        raise SystemExit("the BGM payload runs into the CRO hook stubs.")
+
+    lo = island + ISLAND_SDBGM + len(sdbgm) - BASE
+    hi = island + ISLAND_HOOKS - BASE
+    if pristine[lo:hi] != patched[lo:hi]:
+        raise SystemExit("something was written between the BGM payload and the hook stubs.")
+
+    end = ISLAND_HOOKS + ISLAND_HOOKS_SIZE
     if end > ISLAND_SIZE:
         raise SystemExit("the island is full.")
 
@@ -54,7 +64,7 @@ def main():
             "belong in the plugin."
         )
 
-    print(f"island 0x{island:06X}: helpers + BGM payload ok, "
+    print(f"island 0x{island:06X}: helpers + BGM payload + hook stubs ok, "
           f"{ISLAND_SIZE - end} bytes spare; libpng untouched")
 
 

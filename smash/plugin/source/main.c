@@ -10,19 +10,11 @@ typedef struct {
 } SaltyPatch;
 
 #include "patches.h"
+#include "status.h"
 
 #define NUM_PATCHES (sizeof(saltysd_patches) / sizeof(saltysd_patches[0]))
 
-#define SALTYSD_MAGIC 0x534C5447u /* 'SLTG' */
-
-volatile struct {
-    u32 magic;
-    u32 stage;
-    u32 patches;
-    u32 applied;
-    u32 verified;
-    u32 refused;
-} saltysd_status = { SALTYSD_MAGIC, 0, 0, 0, 0, 0 };
+volatile saltysd_status_t saltysd_status = { SALTYSD_MAGIC, 0, 0, 0, 0, 0, 0, 0 };
 
 static int mem_eq(const volatile u8 *a, const u8 *b, u32 n)
 {
