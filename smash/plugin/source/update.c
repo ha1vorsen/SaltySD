@@ -9,9 +9,7 @@
 
 #define CODE_SUFFIX ".code"
 
-typedef unsigned char  u8;
-typedef unsigned short u16;
-typedef unsigned int   u32;
+#include "types.h"
 
 #ifdef SALTYSD_UPDATE_TEST
 #define UPDATE_ROOT "http://127.0.0.1:8123/"
@@ -21,6 +19,8 @@ typedef unsigned int   u32;
 
 #define MANIFEST_MAX 4096
 #define SIG_SIZE     64
+#define SHA512_SIZE  64
+#define SHA512_HEX_CHARS 128
 #define PLUGIN_MAX   0x100000
 #define COPY_CHUNK   0x1000
 #define HTTP_NOT_FOUND 404
@@ -117,11 +117,11 @@ static int parse_hex32(const char *p, const char *end, u32 *out)
     return 1;
 }
 
-static int parse_hash(const cursor *w, u8 out[64])
+static int parse_hash(const cursor *w, u8 out[SHA512_SIZE])
 {
-    if (w->end - w->at != 128)
+    if (w->end - w->at != SHA512_HEX_CHARS)
         return 0;
-    for (u32 i = 0; i < 64; i++) {
+    for (u32 i = 0; i < SHA512_SIZE; i++) {
         int hi = hex_digit(w->at[i * 2]), lo = hex_digit(w->at[i * 2 + 1]);
         if (hi < 0 || lo < 0)
             return 0;
@@ -207,18 +207,46 @@ static int same_text(const char *a, const char *b)
     return *a == *b;
 }
 
-static void copy_word(char *out, const cursor *w)
+//Both are 14 digits, so a plain compare orders them.
+static int issued_after(const char *a, const char *b)
+{
+    for (u32 i = 0; i < 14; i++)
+        if (a[i] != b[i])
+            return a[i] > b[i];
+    return 0;
+}
+
+//A signed manifest is still not a trusted length.
+static void copy_word(char *out, u32 size, const cursor *w)
 {
     u32 n = (u32)(w->end - w->at);
+    if (n > size - 1)
+        n = size - 1;
     for (u32 i = 0; i < n; i++)
         out[i] = w->at[i];
     out[n] = 0;
 }
 
+//"2026-09-20T02:53:14Z" -> "20260920025314", which compares as a number.
+static int parse_issued(const cursor *w, char out[15])
+{
+    u32 n = 0;
+    for (const char *p = w->at; p < w->end; p++) {
+        if (*p < '0' || *p > '9')
+            continue;
+        if (n == 14)
+            return 0;
+        out[n++] = *p;
+    }
+    out[n] = 0;
+    return n == 14;
+}
+
 static u32 parse(update_check *out, u32 len)
 {
     cursor c = { manifest, manifest + len }, line, word;
-    int have_identity = 0, have_channel = 0, have_file = 0;
+    int have_identity = 0, have_channel = 0, have_file = 0, have_issued = 0;
+    char issued[15];
     u32 server_version[3];
 
     if (!next_line(&c, &line) || !word_is(&line, "saltysd-manifest 1"))
@@ -232,14 +260,19 @@ static u32 parse(update_check *out, u32 len)
             if (out->channel != CHANNEL_STABLE || !next_word(&line, &v) || v.end - v.at > 20 ||
                 !parse_version(v.at, v.end, server_version))
                 return UPDATE_BAD_FORMAT;
-            copy_word(out->identity, &v);
+            copy_word(out->identity, sizeof(out->identity), &v);
             have_identity = 1;
         } else if (word_is(&word, "commit")) {
             cursor v;
             if (out->channel != CHANNEL_DIRTY || !next_word(&line, &v) || !commit_ok(&v))
                 return UPDATE_BAD_FORMAT;
-            copy_word(out->identity, &v);
+            copy_word(out->identity, sizeof(out->identity), &v);
             have_identity = 1;
+        } else if (word_is(&word, "issued")) {
+            cursor v;
+            if (!next_word(&line, &v) || !parse_issued(&v, issued))
+                return UPDATE_BAD_FORMAT;
+            have_issued = 1;
         } else if (word_is(&word, "channel")) {
             cursor v;
             if (!next_word(&line, &v))
@@ -259,12 +292,12 @@ static u32 parse(update_check *out, u32 len)
                 !parse_dec(&size, &out->file_size) || out->file_size == 0 ||
                 out->file_size > PLUGIN_MAX || !parse_hash(&hash, out->file_hash))
                 return UPDATE_BAD_FORMAT;
-            copy_word(out->file, &name);
+            copy_word(out->file, sizeof(out->file), &name);
             have_file = 1;
         }
     }
 
-    if (!have_identity || !have_channel)
+    if (!have_identity || !have_channel || !have_issued)
         return UPDATE_BAD_FORMAT;
 
     int newer;
@@ -282,8 +315,13 @@ static u32 parse(update_check *out, u32 len)
                 server_version[1] != own[1] ? server_version[1] > own[1] :
                 server_version[2] > own[2];
 #endif
+    } else if (!SALTYSD_IS_DIRTY) {
+        newer = 1;
     } else {
-        newer = !SALTYSD_IS_DIRTY || !same_text(out->identity, SALTYSD_IDENTITY);
+        //The dirty channel only ever moves forward: the code rotates daily, so
+        //a build that went backwards would be stranded on an expired one.
+        newer = !same_text(out->identity, SALTYSD_IDENTITY) &&
+                issued_after(issued, SALTYSD_BUILT_AT);
     }
     if (!newer)
         return UPDATE_CURRENT;
@@ -479,7 +517,7 @@ static int readback_ok(const update_check *check, update_install_result *out)
     if (res < 0)
         return fail(out, INSTALL_READBACK, res);
 
-    u8 got[64];
+    u8 got[SHA512_SIZE];
     crypto_sha512_final(&hash, got);
     if (offset != check->file_size || crypto_verify64(got, check->file_hash))
         return fail(out, INSTALL_READBACK, 0);
@@ -585,7 +623,7 @@ static int install(const update_check *check, update_install_result *out, update
     net_fetch(&out->net, make_url(check->base, check->file), to_file, &d, check->file_size);
     fs_file_close(d.file);
 
-    u8 got[64];
+    u8 got[SHA512_SIZE];
     crypto_sha512_final(&d.hash, got);
     int ok = 0;
     if (d.write_result < 0)

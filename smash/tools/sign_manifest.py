@@ -23,6 +23,7 @@ TID = re.compile(r'^[0-9A-F]{8}$')
 NAME = re.compile(r'^[A-Za-z0-9_.-]{1,63}$')
 VERSION = re.compile(r'^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$')
 COMMIT = re.compile(r'^[0-9a-z-]{1,40}$')
+ISSUED = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')
 
 
 def load_key(path):
@@ -73,8 +74,15 @@ def sign(args):
             sys.exit('dirty needs --commit (0-9 a-z -, up to 40) and no --version')
         identity = 'commit ' + args.commit
 
+    if args.issued:
+        if not ISSUED.match(args.issued):
+            sys.exit('--issued must look like YYYY-MM-DDTHH:MM:SSZ')
+        issued = args.issued
+    else:
+        issued = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
     lines = ['saltysd-manifest 1', 'key %d' % args.key_id, 'channel %s' % args.channel, identity,
-             'issued ' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')]
+             'issued ' + issued]
     seen = set()
     for tids, path in args.file:
         tid_list = tids.upper().split(',')
@@ -125,6 +133,7 @@ def main():
     p.add_argument('--commit')
     p.add_argument('--channel', choices=('stable', 'dirty'), required=True)
     p.add_argument('--out', required=True)
+    p.add_argument('--issued')
     p.add_argument('--file', nargs=2, action='append', required=True, metavar=('TIDS', 'PLUGIN'))
     p.set_defaults(run=sign)
 

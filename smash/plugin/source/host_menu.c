@@ -40,7 +40,8 @@ typedef unsigned long long u64;
 
 enum { EXIT_NONE, EXIT_BACK, EXIT_HOME, EXIT_SLEEP, EXIT_CLOSE };
 enum { ITEM_MODS, ITEM_STABLE, ITEM_DIRTY, ITEM_BACK, ITEM_COUNT };
-enum { VIEW_MAIN, VIEW_MODS, VIEW_CONFIRM, VIEW_RESTART, VIEW_CODE, VIEW_OFFER, VIEW_INSTALL_CONFIRM };
+enum { VIEW_MAIN, VIEW_MODS, VIEW_CONFIRM, VIEW_BUSY, VIEW_CODE, VIEW_OFFER,
+       VIEW_INSTALL_CONFIRM, VIEW_COUNT };
 
 static const char *const item_names[ITEM_COUNT] = {
     "Mods", "Check for updates (stable)", "Check for updates (dirty)", "Back",
@@ -99,11 +100,23 @@ static void put_hex(text *t, u32 v)
     t->buf[t->len] = 0;
 }
 
+//max is the width the caller can draw, not a name length: the mark has to
+//fit inside it or it lands past the edge of the screen and is never seen.
 static void put_name(text *t, const unsigned short *name, u32 max)
 {
-    for (u32 i = 0; name[i] && i < max && t->len < 63; i++)
+    u32 len = 0;
+    while (name[len])
+        len++;
+
+    u32 show = len;
+    if (len > max)
+        show = max > 3 ? max - 3 : 0;
+
+    for (u32 i = 0; i < show && t->len < 63; i++)
         t->buf[t->len++] = name[i] >= 0x20 && name[i] <= 0x7E ? (char)name[i] : '?';
     t->buf[t->len] = 0;
+    if (len > max)
+        put_str(t, "...");
 }
 
 static void sleep_ns(u64 ns)
@@ -131,6 +144,8 @@ static void set_status(menu *m, const char *line, const char *line2)
     m->status2 = line2;
 }
 
+static void draw(const menu *m);
+
 static void paint_main(u8 *fb, const screen *s, const menu *m)
 {
     draw_text(fb, s, 8, 8, title_buf, TITLE_RGB);
@@ -145,9 +160,19 @@ static void paint_mods(u8 *fb, const screen *s, const menu *m)
 {
     char line[64];
     text t = { line, 0 };
-    put_str(&t, "Mods (");
-    put_dec(&t, mods_count);
-    put_str(&t, ")");
+    put_str(&t, "Mods ");
+    if (mods_count > MOD_ROWS) {
+        u32 last = m->mod_first + MOD_ROWS;
+        put_dec(&t, m->mod_first + 1);
+        put_str(&t, "-");
+        put_dec(&t, last > mods_count ? mods_count : last);
+        put_str(&t, " of ");
+        put_dec(&t, mods_count);
+    } else {
+        put_str(&t, "(");
+        put_dec(&t, mods_count);
+        put_str(&t, ")");
+    }
     draw_text(fb, s, 8, 8, line, TITLE_RGB);
 
     if (!mods_count)
@@ -185,86 +210,77 @@ static void paint_code(u8 *fb, const screen *s, const menu *m)
     }
 }
 
-static void paint_top(u8 *fb, const menu *m)
+//The top screen would otherwise keep showing the menu behind a blocking step.
+static void paint_busy(u8 *fb, const screen *s, const menu *m)
 {
-    const screen *s = &m->top;
-    clear(fb, s, BG_RGB);
-    switch (m->view) {
-    case VIEW_MODS:
-    case VIEW_CONFIRM:
-        paint_mods(fb, s, m);
-        break;
-    case VIEW_CODE:
-        paint_code(fb, s, m);
-        break;
-    default:
-        paint_main(fb, s, m);
-        break;
-    }
+    draw_text(fb, s, 8, 8, title_buf, TITLE_RGB);
+    draw_text(fb, s, 8, 32, m->status ? m->status : "Working...", TEXT_RGB);
+    if (m->status2)
+        draw_text(fb, s, 8, 44, m->status2, DIM_RGB);
 }
 
-static void paint_bottom(u8 *fb, const menu *m)
+static void hint_main(u8 *fb, const screen *s, const menu *m)
 {
-    const screen *s = &m->bottom;
+    (void)m;
+    draw_text(fb, s, 8, 8, "Up/Down: move  A: select  B: back", DIM_RGB);
+}
+
+static void hint_mods(u8 *fb, const screen *s, const menu *m)
+{
     char line[64];
     text t = { line, 0 };
 
-    clear(fb, s, BG_RGB);
-    switch (m->view) {
-    case VIEW_MAIN:
-        draw_text(fb, s, 8, 8, "Up/Down: move  A: select  B: back", DIM_RGB);
-        break;
-    case VIEW_MODS:
-        draw_text(fb, s, 8, 8, "Up/Down: move  A: on/off", DIM_RGB);
-        draw_text(fb, s, 8, 20, "START: apply  B: back, discard", DIM_RGB);
-        put_dec(&t, mods_changes());
-        put_str(&t, " change(s) not applied");
-        draw_text(fb, s, 8, 44, line, TEXT_RGB);
-        break;
-    case VIEW_CONFIRM:
-        put_str(&t, "Write ");
-        put_dec(&t, mods_changes());
-        put_str(&t, " change(s) and restart?");
-        draw_text(fb, s, 8, 8, line, TEXT_RGB);
-        draw_text(fb, s, 8, 20, "A: yes  B: no", CURSOR_RGB);
-        break;
-    case VIEW_CODE:
-        draw_text(fb, s, 8, 8, "Up/Down: digit  Left/Right: move", DIM_RGB);
-        draw_text(fb, s, 8, 20, "A: check  B: back", DIM_RGB);
-        break;
-    case VIEW_OFFER:
-        draw_text(fb, s, 8, 8, "A: install  B: back", CURSOR_RGB);
-        break;
-    case VIEW_INSTALL_CONFIRM:
-        put_str(&t, "Install ");
-        put_str(&t, last_check.identity);
-        put_str(&t, " and restart?");
-        draw_text(fb, s, 8, 8, line, TEXT_RGB);
-        draw_text(fb, s, 8, 20, "A: yes  B: no", CURSOR_RGB);
-        break;
-    }
-    if (m->status)
-        draw_text(fb, s, 8, 68, m->status, TEXT_RGB);
-    if (m->status2)
-        draw_text(fb, s, 8, 80, m->status2, TEXT_RGB);
+    (void)m;
+    draw_text(fb, s, 8, 8, "Up/Down: move  A: on/off", DIM_RGB);
+    draw_text(fb, s, 8, 20, "START: apply  B: back, discard", DIM_RGB);
+    put_dec(&t, mods_changes());
+    put_str(&t, " change(s) not applied");
+    draw_text(fb, s, 8, 44, line, TEXT_RGB);
 }
 
-static void draw(const menu *m)
+static void hint_confirm(u8 *fb, const screen *s, const menu *m)
 {
-    if (m->has_top) {
-        paint_top(m->top.left, m);
-        if (m->top.right)
-            paint_top(m->top.right, m);
-    }
-    if (m->has_bottom)
-        paint_bottom(m->bottom.left, m);
-    flush_data_cache();
+    char line[64];
+    text t = { line, 0 };
+
+    (void)m;
+    put_str(&t, "Write ");
+    put_dec(&t, mods_changes());
+    put_str(&t, " change(s) and restart?");
+    draw_text(fb, s, 8, 8, line, TEXT_RGB);
+    draw_text(fb, s, 8, 20, "A: yes  B: no", CURSOR_RGB);
+}
+
+static void hint_code(u8 *fb, const screen *s, const menu *m)
+{
+    (void)m;
+    draw_text(fb, s, 8, 8, "Up/Down: digit  Left/Right: move", DIM_RGB);
+    draw_text(fb, s, 8, 20, "A: check  B: back", DIM_RGB);
+}
+
+static void hint_offer(u8 *fb, const screen *s, const menu *m)
+{
+    (void)m;
+    draw_text(fb, s, 8, 8, "A: install  B: back", CURSOR_RGB);
+}
+
+static void hint_install_confirm(u8 *fb, const screen *s, const menu *m)
+{
+    char line[64];
+    text t = { line, 0 };
+
+    (void)m;
+    put_str(&t, "Install ");
+    put_str(&t, last_check.identity);
+    put_str(&t, " and restart?");
+    draw_text(fb, s, 8, 8, line, TEXT_RGB);
+    draw_text(fb, s, 8, 20, "A: yes  B: no", CURSOR_RGB);
 }
 
 static void restart(menu *m, text *t)
 {
     put_str(t, ". Restarting...");
-    m->view = VIEW_RESTART;
+    m->view = VIEW_BUSY;
     draw(m);
     sleep_ns(RESTART_DELAY_NS);
 
@@ -453,7 +469,7 @@ static void install_update(menu *m)
 {
     progress_state p = { m, 0 };
     update_install_result r;
-    m->view = VIEW_RESTART;
+    m->view = VIEW_BUSY;
     if (update_install(&last_check, &r, show_progress, &p)) {
         text t = { status_buf, 0 };
         put_str(&t, "Installed ");
@@ -488,7 +504,7 @@ static void run_gate(menu *m)
     saltysd_status.gate_expired++;
 
     set_status(m, "Dirty access expired. Installing stable...", 0);
-    m->view = VIEW_RESTART;
+    m->view = VIEW_BUSY;
     draw(m);
     update_check_run(&last_check, CHANNEL_STABLE, 0);
     m->view = VIEW_MAIN;
@@ -544,13 +560,13 @@ static u32 press_main(menu *m, u32 pressed)
     }
 }
 
-static void press_mods(menu *m, u32 pressed)
+static u32 press_mods(menu *m, u32 pressed)
 {
     if (pressed & KEY_B) {
         fs_close();
         m->view = VIEW_MAIN;
         set_status(m, 0, 0);
-        return;
+        return EXIT_NONE;
     }
     if (pressed & KEY_UP)
         move_mod_cursor(m, 0);
@@ -560,11 +576,16 @@ static void press_mods(menu *m, u32 pressed)
         mods[m->mod_cursor].wanted ^= 1;
         set_status(m, 0, 0);
     }
-    if ((pressed & KEY_START) && mods_changes())
-        m->view = VIEW_CONFIRM;
+    if (pressed & KEY_START) {
+        if (mods_changes())
+            m->view = VIEW_CONFIRM;
+        else
+            set_status(m, "Nothing to apply: no mods changed", 0);
+    }
+    return EXIT_NONE;
 }
 
-static void press_confirm(menu *m, u32 pressed)
+static u32 press_confirm(menu *m, u32 pressed)
 {
     if (pressed & KEY_A) {
         m->view = VIEW_MODS;
@@ -572,9 +593,19 @@ static void press_confirm(menu *m, u32 pressed)
     } else if (pressed & KEY_B) {
         m->view = VIEW_MODS;
     }
+    return EXIT_NONE;
 }
 
-static void press_code(menu *m, u32 pressed)
+//A failed restart leaves the busy view up; any press returns to the menu,
+//keeping the error on screen.
+static u32 press_busy(menu *m, u32 pressed)
+{
+    (void)pressed;
+    m->view = VIEW_MAIN;
+    return EXIT_NONE;
+}
+
+static u32 press_code(menu *m, u32 pressed)
 {
     char *d = &m->code[m->code_pos];
     if (pressed & KEY_UP)
@@ -591,22 +622,72 @@ static void press_code(menu *m, u32 pressed)
     } else if (pressed & KEY_A) {
         check_updates(m, CHANNEL_DIRTY);
     }
+    return EXIT_NONE;
 }
 
-static void press_offer(menu *m, u32 pressed)
+static u32 press_offer(menu *m, u32 pressed)
 {
     if (pressed & KEY_A)
         m->view = VIEW_INSTALL_CONFIRM;
     else if (pressed & KEY_B)
         m->view = VIEW_MAIN;
+    return EXIT_NONE;
 }
 
-static void press_install_confirm(menu *m, u32 pressed)
+static u32 press_install_confirm(menu *m, u32 pressed)
 {
     if (pressed & KEY_A)
         install_update(m);
     else if (pressed & KEY_B)
         m->view = VIEW_OFFER;
+    return EXIT_NONE;
+}
+
+typedef struct {
+    void (*top)(u8 *fb, const screen *s, const menu *m);
+    void (*bottom)(u8 *fb, const screen *s, const menu *m);
+    u32  (*press)(menu *m, u32 pressed);
+} view_def;
+
+static const view_def views[VIEW_COUNT] = {
+    [VIEW_MAIN]            = { paint_main, hint_main,            press_main },
+    [VIEW_MODS]            = { paint_mods, hint_mods,            press_mods },
+    [VIEW_CONFIRM]         = { paint_mods, hint_confirm,         press_confirm },
+    [VIEW_BUSY]            = { paint_busy, 0,                    press_busy },
+    [VIEW_CODE]            = { paint_code, hint_code,            press_code },
+    [VIEW_OFFER]           = { paint_main, hint_offer,           press_offer },
+    [VIEW_INSTALL_CONFIRM] = { paint_main, hint_install_confirm, press_install_confirm },
+};
+
+static void paint_top(u8 *fb, const menu *m)
+{
+    const screen *s = &m->top;
+    clear(fb, s, BG_RGB);
+    views[m->view].top(fb, s, m);
+}
+
+static void paint_bottom(u8 *fb, const menu *m)
+{
+    const screen *s = &m->bottom;
+    clear(fb, s, BG_RGB);
+    if (views[m->view].bottom)
+        views[m->view].bottom(fb, s, m);
+    if (m->status)
+        draw_text(fb, s, 8, 68, m->status, TEXT_RGB);
+    if (m->status2)
+        draw_text(fb, s, 8, 80, m->status2, TEXT_RGB);
+}
+
+static void draw(const menu *m)
+{
+    if (m->has_top) {
+        paint_top(m->top.left, m);
+        if (m->top.right)
+            paint_top(m->top.right, m);
+    }
+    if (m->has_bottom)
+        paint_bottom(m->bottom.left, m);
+    flush_data_cache();
 }
 
 static u32 run_loop(menu *m)
@@ -624,38 +705,18 @@ static u32 run_loop(menu *m)
         u32 pressed = now & ~held;
         held = now;
 
+        if (m->view >= VIEW_COUNT)
+            m->view = VIEW_MAIN;
+
         if (pressed) {
-            u32 reason = EXIT_NONE;
-            switch (m->view) {
-            case VIEW_MAIN:
-                reason = press_main(m, pressed);
-                break;
-            case VIEW_MODS:
-                press_mods(m, pressed);
-                break;
-            case VIEW_CONFIRM:
-                press_confirm(m, pressed);
-                break;
-            case VIEW_CODE:
-                press_code(m, pressed);
-                break;
-            case VIEW_OFFER:
-                press_offer(m, pressed);
-                break;
-            case VIEW_INSTALL_CONFIRM:
-                press_install_confirm(m, pressed);
-                break;
-            default:
-                m->view = VIEW_MAIN;
-                break;
-            }
+            u32 reason = views[m->view].press(m, pressed);
             if (reason)
                 return reason;
             dirty = 1;
         }
 
         //A queued GPU transfer can still land after the first draw.
-        if (dirty || polls++ % REDRAW_POLLS == 0) {
+        if (polls++ % REDRAW_POLLS == 0 || dirty) {
             draw(m);
             dirty = 0;
         }

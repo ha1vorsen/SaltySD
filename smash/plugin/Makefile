@@ -38,6 +38,28 @@ $(error VERSION must look like X.Y.Z)
 endif
 endif
 COMMIT  := $(shell git describe --always --dirty --abbrev=7)
+# git describe names a commit, not a build: every build off one dirty tree
+# shares that name, and the updater reads a shared name as "already running it".
+# DIRTY_ID names the build, and the publish script computes one for all regions.
+ifneq ($(DIRTY_ID),)
+ifeq ($(shell echo "$(DIRTY_ID)" | grep -E "^[0-9a-z]{7}(-[0-9a-f]{8})?-[0-9]{6}-[0-9]{4}$$"),)
+$(error DIRTY_ID must look like <commit7>[-<src8>]-YYMMDD-HHMM)
+endif
+COMMIT := $(DIRTY_ID)
+endif
+ifneq ($(BUILT_AT),)
+ifeq ($(shell echo "$(BUILT_AT)" | grep -E "^[0-9]{14}$$"),)
+$(error BUILT_AT must be 14 digits, YYYYMMDDHHMMSS)
+endif
+endif
+# A bare make is a local build: it claims no build time, so it takes anything.
+BUILT_AT ?= 00000000000000
+
+ifneq ($(VERSION),)
+IDENTITY := $(VERSION)
+else
+IDENTITY := $(COMMIT)
+endif
 CFLAGS  += -I$(BUILD)
 LDFLAGS := $(ARCH) -T 3gx.ld -nostdlib -nostartfiles \
            -Wl,--gc-sections,--strip-discarded,-Map,$(BUILD)/$(TARGET).map
@@ -77,6 +99,7 @@ else
 	@test -n "$(COMMIT)" || { echo "no git commit to name this dirty build"; exit 1; }
 	@echo '#define SALTYSD_COMMIT "$(COMMIT)"' > $@
 endif
+	@echo '#define SALTYSD_BUILT_AT "$(BUILT_AT)"' >> $@
 
 $(BUILD)/host_menu.o $(BUILD)/update.o: $(BUILD)/buildinfo.h
 
@@ -115,7 +138,7 @@ $(TARGET).3gx: $(TARGET).elf plugin.json
 	@python ../tools/mk3gx.py $(TARGET).elf $(BUILD)/plugin.json $@
 
 $(BUILD)/plugin.json: plugin.json | $(BUILD)
-	@python -c "import json; i=json.load(open('plugin.json')); i['targets']=['0x'+t for t in '$(TITLE_IDS)'.split()]; json.dump(i,open('$(BUILD)/plugin.json','w'))"
+	@python -c "import json; i=json.load(open('plugin.json')); i['targets']=['0x'+t for t in '$(TITLE_IDS)'.split()]; i['title']='SaltySD $(IDENTITY)'; json.dump(i,open('$(BUILD)/plugin.json','w'))"
 
 $(TARGET).3gx: $(BUILD)/plugin.json
 
