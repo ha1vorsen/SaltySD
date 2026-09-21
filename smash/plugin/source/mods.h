@@ -2,6 +2,8 @@
 #define SALTYSD_MODS_H
 
 #define MODS_MAX       62
+#define MODS_INDEX_DIR  "/saltysd"
+#define MODS_INDEX_STEM ".saltysd-"
 #define MOD_NAME_CHARS 0x40
 
 typedef struct {
@@ -24,5 +26,6 @@ extern unsigned int mods_skipped;
 int mods_load(void);
 unsigned int mods_changes(void);
 void mods_apply(mods_apply_result *out);
+int mods_drop_index(void);
 
 #endif
