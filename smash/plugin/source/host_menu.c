@@ -39,12 +39,13 @@ typedef unsigned long long u64;
 #define MOD_NAME_SHOWN       40
 
 enum { EXIT_NONE, EXIT_BACK, EXIT_HOME, EXIT_SLEEP, EXIT_CLOSE };
-enum { ITEM_MODS, ITEM_STABLE, ITEM_DIRTY, ITEM_BACK, ITEM_COUNT };
+enum { ITEM_MODS, ITEM_REBUILD, ITEM_STABLE, ITEM_DIRTY, ITEM_BACK, ITEM_COUNT };
 enum { VIEW_MAIN, VIEW_MODS, VIEW_CONFIRM, VIEW_BUSY, VIEW_CODE, VIEW_OFFER,
-       VIEW_INSTALL_CONFIRM, VIEW_COUNT };
+       VIEW_INSTALL_CONFIRM, VIEW_REBUILD, VIEW_COUNT };
 
 static const char *const item_names[ITEM_COUNT] = {
-    "Mods", "Check for updates (stable)", "Check for updates (dirty)", "Back",
+    "Mods", "Rebuild mod index", "Check for updates (stable)",
+    "Check for updates (dirty)", "Back",
 };
 
 typedef struct {
@@ -189,7 +190,7 @@ static void paint_mods(u8 *fb, const screen *s, const menu *m)
             draw_text(fb, s, 8, y, "*", CURSOR_RGB);
         if (on)
             draw_text(fb, s, 16, y, ">", CURSOR_RGB);
-        draw_text(fb, s, 32, y, mod->wanted ? "[on ]" : "[off]", rgb);
+        draw_text(fb, s, mod->wanted ? 40 : 32, y, mod->wanted ? "[On]" : "[Off]", rgb);
 
         t.len = 0;
         put_name(&t, mod->name, MOD_NAME_SHOWN);
@@ -199,7 +200,7 @@ static void paint_mods(u8 *fb, const screen *s, const menu *m)
 
 static void paint_code(u8 *fb, const screen *s, const menu *m)
 {
-    draw_text(fb, s, 8, 8, "Dirty builds", TITLE_RGB);
+    draw_text(fb, s, 8, 8, "Nightly builds", TITLE_RGB);
     draw_text(fb, s, 8, 32, "Enter today's code:", TEXT_RGB);
     for (u32 i = 0; i < 4; i++) {
         char digit[2] = { m->code[i], 0 };
@@ -222,7 +223,7 @@ static void paint_busy(u8 *fb, const screen *s, const menu *m)
 static void hint_main(u8 *fb, const screen *s, const menu *m)
 {
     (void)m;
-    draw_text(fb, s, 8, 8, "Up/Down: move  A: select  B: back", DIM_RGB);
+    draw_text(fb, s, 8, 8, "Up/Down: Highlight  A: Select  B: Back", DIM_RGB);
 }
 
 static void hint_mods(u8 *fb, const screen *s, const menu *m)
@@ -231,10 +232,10 @@ static void hint_mods(u8 *fb, const screen *s, const menu *m)
     text t = { line, 0 };
 
     (void)m;
-    draw_text(fb, s, 8, 8, "Up/Down: move  A: on/off", DIM_RGB);
-    draw_text(fb, s, 8, 20, "START: apply  B: back, discard", DIM_RGB);
+    draw_text(fb, s, 8, 8, "Up/Down: Move  A: On/Off", DIM_RGB);
+    draw_text(fb, s, 8, 20, "START: Apply  B: Back/Discard", DIM_RGB);
     put_dec(&t, mods_changes());
-    put_str(&t, " change(s) not applied");
+    put_str(&t, " Change(s) not applied");
     draw_text(fb, s, 8, 44, line, TEXT_RGB);
 }
 
@@ -248,20 +249,20 @@ static void hint_confirm(u8 *fb, const screen *s, const menu *m)
     put_dec(&t, mods_changes());
     put_str(&t, " change(s) and restart?");
     draw_text(fb, s, 8, 8, line, TEXT_RGB);
-    draw_text(fb, s, 8, 20, "A: yes  B: no", CURSOR_RGB);
+    draw_text(fb, s, 8, 20, "A: Yes  B: No", CURSOR_RGB);
 }
 
 static void hint_code(u8 *fb, const screen *s, const menu *m)
 {
     (void)m;
-    draw_text(fb, s, 8, 8, "Up/Down: digit  Left/Right: move", DIM_RGB);
-    draw_text(fb, s, 8, 20, "A: check  B: back", DIM_RGB);
+    draw_text(fb, s, 8, 8, "Up/Down: Digit  Left/Right: Move", DIM_RGB);
+    draw_text(fb, s, 8, 20, "A: Check  B: Back", DIM_RGB);
 }
 
 static void hint_offer(u8 *fb, const screen *s, const menu *m)
 {
     (void)m;
-    draw_text(fb, s, 8, 8, "A: install  B: back", CURSOR_RGB);
+    draw_text(fb, s, 8, 8, "A: Install  B: Back", CURSOR_RGB);
 }
 
 static void hint_install_confirm(u8 *fb, const screen *s, const menu *m)
@@ -274,12 +275,12 @@ static void hint_install_confirm(u8 *fb, const screen *s, const menu *m)
     put_str(&t, last_check.identity);
     put_str(&t, " and restart?");
     draw_text(fb, s, 8, 8, line, TEXT_RGB);
-    draw_text(fb, s, 8, 20, "A: yes  B: no", CURSOR_RGB);
+    draw_text(fb, s, 8, 20, "A: Yes  B: No", CURSOR_RGB);
 }
 
-static void restart(menu *m, text *t)
+static void restart(menu *m)
 {
-    put_str(t, ". Restarting...");
+    set_status(m, 0, 0);
     m->view = VIEW_BUSY;
     draw(m);
     sleep_ns(RESTART_DELAY_NS);
@@ -287,9 +288,10 @@ static void restart(menu *m, text *t)
     fs_close();
     int res = restart_app(0, 0);
     saltysd_status.restart_result = res;
-    t->len = 0;
-    put_str(t, "Restart failed: ");
-    put_hex(t, (u32)res);
+
+    text t = { status_buf, 0 };
+    put_str(&t, "Restart failed: ");
+    put_hex(&t, (u32)res);
     set_status(m, status_buf, 0);
 }
 
@@ -346,8 +348,12 @@ static void apply_mods(menu *m)
         put_hex(&t2, (u32)r.first_error);
         m->status2 = status2_buf;
     }
-    if (r.applied)
-        restart(m, &t);
+    if (r.applied) {
+        int res = mods_drop_index();
+        if (res < 0)
+            saltysd_status.last_fs_result = res;
+        restart(m);
+    }
 }
 
 static const char *const net_stage_names[] = {
@@ -384,7 +390,7 @@ static void check_updates(menu *m, u32 channel)
     switch (r->outcome) {
     case UPDATE_CURRENT:
         put_str(&t, "Up to date");
-        put_str(&t2, "Server has ");
+        put_str(&t2, "Server's build: ");
         put_str(&t2, r->identity);
         break;
     case UPDATE_AVAILABLE:
@@ -411,7 +417,7 @@ static void check_updates(menu *m, u32 channel)
         put_net_detail(&t2, &r->net);
         break;
     case UPDATE_CODE_REJECTED:
-        put_str(&t, "Code not accepted");
+        put_str(&t, "Invalid code");
         break;
     case UPDATE_BAD_FORMAT:
         put_str(&t, "Manifest not understood");
@@ -419,7 +425,7 @@ static void check_updates(menu *m, u32 channel)
     case UPDATE_UNKNOWN_KEY:
         put_str(&t, "Manifest key ");
         put_dec(&t, r->key_id);
-        put_str(&t, " is not built in");
+        put_str(&t, " is unknown");
         break;
     case UPDATE_KEY_NOT_ALLOWED:
         put_str(&t, "Key ");
@@ -427,13 +433,13 @@ static void check_updates(menu *m, u32 channel)
         put_str(&t, " may not sign this channel");
         break;
     case UPDATE_WRONG_CHANNEL:
-        put_str(&t, "Manifest is for another channel");
+        put_str(&t, "Invalid channel");
         break;
     case UPDATE_BAD_SIGNATURE:
-        put_str(&t, "Signature check failed; ignored");
+        put_str(&t, "Invalid update. Aborting install.");
         break;
     default:
-        put_str(&t, "No update for this region");
+        put_str(&t, "No update for your region");
         break;
     }
     set_status(m, status_buf, t2.len ? status2_buf : 0);
@@ -471,11 +477,7 @@ static void install_update(menu *m)
     update_install_result r;
     m->view = VIEW_BUSY;
     if (update_install(&last_check, &r, show_progress, &p)) {
-        text t = { status_buf, 0 };
-        put_str(&t, "Installed ");
-        put_str(&t, last_check.identity);
-        set_status(m, status_buf, 0);
-        restart(m, &t);
+        restart(m);
         m->view = VIEW_MAIN;
         return;
     }
@@ -546,6 +548,10 @@ static u32 press_main(menu *m, u32 pressed)
     case ITEM_MODS:
         open_mods(m);
         return EXIT_NONE;
+    case ITEM_REBUILD:
+        m->view = VIEW_REBUILD;
+        set_status(m, 0, 0);
+        return EXIT_NONE;
     case ITEM_STABLE:
         check_updates(m, CHANNEL_STABLE);
         return EXIT_NONE;
@@ -580,7 +586,7 @@ static u32 press_mods(menu *m, u32 pressed)
         if (mods_changes())
             m->view = VIEW_CONFIRM;
         else
-            set_status(m, "Nothing to apply: no mods changed", 0);
+            set_status(m, "Nothing to apply: no mods changed.", 0);
     }
     return EXIT_NONE;
 }
@@ -643,6 +649,43 @@ static u32 press_install_confirm(menu *m, u32 pressed)
     return EXIT_NONE;
 }
 
+static void hint_rebuild(u8 *fb, const screen *s, const menu *m)
+{
+    (void)m;
+    draw_text(fb, s, 8, 8, "Rebuild cache and restart?", TEXT_RGB);
+    draw_text(fb, s, 8, 20, "The next boot might take several minutes", DIM_RGB);
+    draw_text(fb, s, 8, 32, "A: Yes  B: No", CURSOR_RGB);
+}
+
+static void rebuild_index(menu *m)
+{
+    int res = fs_open();
+    if (res < 0) {
+        fs_failed(m, "SD access", res);
+        return;
+    }
+
+    res = mods_drop_index();
+    if (res < 0) {
+        fs_close();
+        fs_failed(m, "Removing the index", res);
+        return;
+    }
+
+    restart(m);
+}
+
+static u32 press_rebuild(menu *m, u32 pressed)
+{
+    if (pressed & KEY_A) {
+        m->view = VIEW_MAIN;
+        rebuild_index(m);
+    } else if (pressed & KEY_B) {
+        m->view = VIEW_MAIN;
+    }
+    return EXIT_NONE;
+}
+
 typedef struct {
     void (*top)(u8 *fb, const screen *s, const menu *m);
     void (*bottom)(u8 *fb, const screen *s, const menu *m);
@@ -657,6 +700,7 @@ static const view_def views[VIEW_COUNT] = {
     [VIEW_CODE]            = { paint_code, hint_code,            press_code },
     [VIEW_OFFER]           = { paint_main, hint_offer,           press_offer },
     [VIEW_INSTALL_CONFIRM] = { paint_main, hint_install_confirm, press_install_confirm },
+    [VIEW_REBUILD]         = { paint_main, hint_rebuild,         press_rebuild },
 };
 
 static void paint_top(u8 *fb, const menu *m)

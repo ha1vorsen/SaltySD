@@ -34,7 +34,12 @@ It also keeps the payloads out of the game's binary. They used to be written ove
 
 **Caching**
 
-Caching is no longer used as of SaltySD 0.9
+The first boot after a change works out which files every mod supplies and saves the result to the SD card. Later boots read that back instead of walking the card and rebuilding the game's file table again, and the same work no longer runs mid-game when a mode loads its files.
+
+ * The saved files are hidden, one per game archive, at `sd:/saltysd/.saltysd-*`. They can be deleted at any time; the next boot writes them again.
+ * Switching a mod on or off rebuilds them by itself, as does updating SaltySD.
+ * Changing files inside a mod folder cannot be noticed. Use **Rebuild mod index** in the SaltySD menu after doing that.
+ * Each boot writes what it did, and how long each stage took, to `sd:/saltysd/smash/saltysd.log`.
 
 **Notes**
 
