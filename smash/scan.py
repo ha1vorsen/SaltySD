@@ -124,8 +124,9 @@ menu_hook_word = r32(f, menu_hook_site_addr - 0x100000)
 if menu_hook_word != 0xE5902040:
     raise ValueError("menu export has an unknown displaced instruction")
     
-common = open('common.asm','w')
-common_armips = open('common.armips.asm','w')
+os.makedirs('build', exist_ok=True)
+common = open('build/common.asm','w')
+common_armips = open('build/common.armips.asm','w')
 
 # Print to stderr a helpful message in case someone tries to patch the Demo.
 # This will also stop the Makefile
@@ -170,7 +171,7 @@ if(r32(f,f.find(path_str_sig)-4) == 0x0):
 else:
     print(".equ something_resource_lock, \t" + hex(r32(f,f.find(path_str_sig)-4)) + "\n", file=common)
 
-print("common.asm generated successfully!")
+print("build/common.asm generated successfully!")
 
 print("mount_sdmc equ (" + hex(f.find(mount_sdmc_sig)+0x100000) + ")", file=common_armips)
 print("unmount_path equ (" + hex(f.find(unmount_path_sig)+0x100000) + ")", file=common_armips)
@@ -277,9 +278,9 @@ print("weapon_specializer_thing2 equ (" + hex(r32(f, f.find(weapon_specializer_d
 print("weapon_specializer_thing3 equ (" + hex(r32(f, f.find(weapon_specializer_default_sig)+0x48)) + ")", file=common_armips)
 print("weapon_specializer_thing4 equ (" + hex(f.find(weapon_specializer_thing4_sig)+0x100000) + ")", file=common_armips)
 
-print("common.armips.asm generated successfully!")
+print("build/common.armips.asm generated successfully!")
 
-common = open('common.h','w')
+common = open('build/common.h','w')
 print("#define mount_sdmc_ADDR " + hex(f.find(mount_sdmc_sig)+0x100000), file=common)
 print("#define unmount_path_ADDR " + hex(f.find(unmount_path_sig)+0x100000), file=common)
 print("#define IFile_Init_ADDR " + hex(f.find(IFile_Init_sig)+0x100000), file=common)
@@ -324,4 +325,4 @@ if(r32(f,f.find(path_str_sig)-4) == 0x0):
 else:
     print("#define something_resource_lock_ADDR " + hex(r32(f,f.find(path_str_sig)-4)) + "\n", file=common)
     
-print("common.h generated successfully!")
+print("build/common.h generated successfully!")
