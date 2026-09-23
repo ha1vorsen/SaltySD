@@ -53,11 +53,11 @@ ISLAND_HOOKS = 0x220
 BASE = 0x100000
 
 def armips_value(name):
-    src = open('common.armips.asm', encoding='latin-1').read()
+    src = open('build/common.armips.asm', encoding='latin-1').read()
     pattern = r"^%s equ \((0x[0-9a-fA-F]+)\)$" % re.escape(name)
     match = re.search(pattern, src, re.MULTILINE)
     if not match:
-        raise RuntimeError("common.armips.asm has no %s; run scan.py first." % name)
+        raise RuntimeError("build/common.armips.asm has no %s; run scan.py first." % name)
     return int(match.group(1), 16)
 
 def island_base():
@@ -69,13 +69,13 @@ try:
 except TypeError:
     f = open(sys.argv[1], 'rb').read()
 
-rf_alloc = readbytes("bin/incalloc.bin")
-rf_hook = readbytes("bin/hookresource.bin")
-#ls_alloc = readbytes("bin/inclsalloc.bin")
-#ls_hook = readbytes("bin/hookls.bin")
-thread_hook = readbytes("bin/hookthread.bin")
-norm_hook = readbytes("bin/hooknorm.bin")
-sdbgm = readbytes("bin/island_sdbgm.bin")
+rf_alloc = readbytes("build/bin/incalloc.bin")
+rf_hook = readbytes("build/bin/hookresource.bin")
+#ls_alloc = readbytes("build/bin/inclsalloc.bin")
+#ls_hook = readbytes("build/bin/hookls.bin")
+thread_hook = readbytes("build/bin/hookthread.bin")
+norm_hook = readbytes("build/bin/hooknorm.bin")
+sdbgm = readbytes("build/bin/island_sdbgm.bin")
 
 bgm_str_addr = f.find(bgm_sig)
 bgm_hook_addr = bgm_str_addr + bgm_hook_offs
@@ -103,7 +103,7 @@ try:
 except:
     f = f
 
-w = open(os.path.splitext(sys.argv[1])[0]+"_saltysd.bin", 'w+b')
+w = open("build/code_saltysd.bin", 'w+b')
 f = insertreplace(f,rf_hook,rf_hook_addr)
 f = insertreplace(f,rf_alloc,rf_alloc_addr)
 #f = insertreplace(f,ls_hook,ls_hook_addr)
