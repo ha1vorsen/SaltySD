@@ -78,7 +78,9 @@ all: $(TARGET).3gx
 $(BUILD):
 	@mkdir -p $(BUILD)
 
-patches:
+patches: $(SOURCES)/patches.h
+
+$(SOURCES)/patches.h: $(CODEBIN) $(PATCHED) ../tools/gen_patches.py
 	@test -f "$(CODEBIN)" -a -f "$(PATCHED)" || { \
 	  echo ""; \
 	  echo "  error: need both the pristine and the patched binary:"; \
@@ -88,9 +90,11 @@ patches:
 	  echo "  Build from the directory above, which produces them."; \
 	  echo ""; \
 	  exit 1; }
-	@python ../tools/gen_patches.py "$(CODEBIN)" "$(PATCHED)" $(SOURCES)/patches.h
+	@python ../tools/gen_patches.py "$(CODEBIN)" "$(PATCHED)" $@
 
 $(OFILES): | patches $(BUILD)
+
+$(BUILD)/main.o: $(SOURCES)/patches.h
 
 $(BUILD)/buildinfo.h: FORCE | $(BUILD)
 ifneq ($(VERSION),)
@@ -129,10 +133,13 @@ $(TARGET).elf: $(OFILES) 3gx.ld
 	@echo "ld  $@"
 	@$(LD) $(LDFLAGS) $(OFILES) -o $@
 	$(check_entry_table)
+	@python ../tools/verify_plugin_abi.py $(TARGET).elf
 	@python ../tools/verify_plugin.py $(TARGET).elf "$(CODEBIN)" "$(PATCHED)"
 
 verify:
 	$(check_entry_table)
+	@python ../tools/verify_plugin_abi.py $(TARGET).elf
+	@python ../tools/verify_plugin.py $(TARGET).elf "$(CODEBIN)" "$(PATCHED)"
 
 $(TARGET).3gx: $(TARGET).elf plugin.json
 	@python ../tools/mk3gx.py $(TARGET).elf $(BUILD)/plugin.json $@
