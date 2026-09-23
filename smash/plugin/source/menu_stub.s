@@ -1,4 +1,4 @@
-#include "../../common.h"
+#include "common.h"
 
 .arm
 .section .text.menu_hook, "ax"

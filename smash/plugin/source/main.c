@@ -9,7 +9,7 @@ typedef struct {
     const u8 *orig;
 } SaltyPatch;
 
-#include "patches.h"
+#include <patches.h>
 #include "status.h"
 
 #define NUM_PATCHES (sizeof(saltysd_patches) / sizeof(saltysd_patches[0]))

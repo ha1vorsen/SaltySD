@@ -13,20 +13,22 @@ LD      := $(PREFIX)gcc
 NM      := $(PREFIX)nm
 
 TARGET  := saltysd
-BUILD   := build
+BUILD   := ../build/plugin
 SOURCES := source
+TARGET_ELF = $(BUILD)/$(TARGET).elf
+TARGET_3GX = $(BUILD)/$(TARGET).3gx
 
 TITLE_IDS ?= 000EDF00
 
 CODEBIN  ?= $(CURDIR)/../code.bin
-PATCHED  ?= $(CURDIR)/../code_saltysd.bin
+PATCHED  ?= $(CURDIR)/../build/code_saltysd.bin
 
 ARCH    := -marm -march=armv6k -mtune=mpcore -mfloat-abi=hard
 # -O2 is what resource_mod has always been built with.
 CFLAGS  := $(ARCH) -std=gnu11 -O2 -Wall -fomit-frame-pointer -ffunction-sections \
-           -fdata-sections -fno-builtin -ffreestanding -fno-strict-aliasing -I.. -Isource \
+           -fdata-sections -fno-builtin -ffreestanding -fno-strict-aliasing -I$(BUILD) -I../build -I.. -Isource \
            -Isource/monocypher
-ASFLAGS := $(ARCH) -x assembler-with-cpp -Wa,-I,..
+ASFLAGS := $(ARCH) -x assembler-with-cpp -I../build -Wa,-I,.. -Wa,-I,../build
 CFLAGS  += -DSALTYSD_TITLE_ID=0x$(firstword $(TITLE_IDS))
 ifeq ($(UPDATE_TEST),1)
 CFLAGS  += -DSALTYSD_UPDATE_TEST
@@ -60,7 +62,6 @@ IDENTITY := $(VERSION)
 else
 IDENTITY := $(COMMIT)
 endif
-CFLAGS  += -I$(BUILD)
 LDFLAGS := $(ARCH) -T 3gx.ld -nostdlib -nostartfiles \
            -Wl,--gc-sections,--strip-discarded,-Map,$(BUILD)/$(TARGET).map
 
@@ -73,14 +74,14 @@ OFILES  := $(patsubst $(SOURCES)/%.s,$(BUILD)/%.o,$(SFILES)) \
 
 .PHONY: all clean patches verify FORCE
 
-all: $(TARGET).3gx
+all: $(TARGET_3GX)
 
 $(BUILD):
 	@mkdir -p $(BUILD)
 
-patches: $(SOURCES)/patches.h
+patches: $(BUILD)/patches.h
 
-$(SOURCES)/patches.h: $(CODEBIN) $(PATCHED) ../tools/gen_patches.py
+$(BUILD)/patches.h: $(CODEBIN) $(PATCHED) ../tools/gen_patches.py | $(BUILD)
 	@test -f "$(CODEBIN)" -a -f "$(PATCHED)" || { \
 	  echo ""; \
 	  echo "  error: need both the pristine and the patched binary:"; \
@@ -94,7 +95,7 @@ $(SOURCES)/patches.h: $(CODEBIN) $(PATCHED) ../tools/gen_patches.py
 
 $(OFILES): | patches $(BUILD)
 
-$(BUILD)/main.o: $(SOURCES)/patches.h
+$(BUILD)/main.o: $(BUILD)/patches.h
 
 $(BUILD)/buildinfo.h: FORCE | $(BUILD)
 ifneq ($(VERSION),)
@@ -121,33 +122,33 @@ $(BUILD)/%.o: $(SOURCES)/monocypher/%.c
 
 # A moved or resized entry table is caught here rather than on hardware.
 define check_entry_table
-	@start=`$(NM) $(TARGET).elf | grep -i " T _start$$" | cut -d' ' -f1`; \
-	 after=`$(NM) $(TARGET).elf | grep -i " t plugin_start$$" | cut -d' ' -f1`; \
-	 status=`$(NM) $(TARGET).elf | grep -i " [DdBb] saltysd_status$$" | cut -d' ' -f1`; \
+	@start=`$(NM) $(TARGET_ELF) | grep -i " T _start$$" | cut -d' ' -f1`; \
+	 after=`$(NM) $(TARGET_ELF) | grep -i " t plugin_start$$" | cut -d' ' -f1`; \
+	 status=`$(NM) $(TARGET_ELF) | grep -i " [DdBb] saltysd_status$$" | cut -d' ' -f1`; \
 	 test "$$start" = "07000100" || { echo "_start is at 0x$$start, expected 0x07000100"; exit 1; }; \
 	 test "$$after" = "07000120" || { echo "the entry table is not eight words (plugin_start at 0x$$after)"; exit 1; }; \
 	 echo "entry table 0x07000100-0x0700011F ok, status word at 0x$$status"
 endef
 
-$(TARGET).elf: $(OFILES) 3gx.ld
+$(TARGET_ELF): $(OFILES) 3gx.ld
 	@echo "ld  $@"
 	@$(LD) $(LDFLAGS) $(OFILES) -o $@
 	$(check_entry_table)
-	@python ../tools/verify_plugin_abi.py $(TARGET).elf
-	@python ../tools/verify_plugin.py $(TARGET).elf "$(CODEBIN)" "$(PATCHED)"
+	@python ../tools/verify_plugin_abi.py $(TARGET_ELF)
+	@python ../tools/verify_plugin.py $(TARGET_ELF) "$(CODEBIN)" "$(PATCHED)"
 
 verify:
 	$(check_entry_table)
-	@python ../tools/verify_plugin_abi.py $(TARGET).elf
-	@python ../tools/verify_plugin.py $(TARGET).elf "$(CODEBIN)" "$(PATCHED)"
+	@python ../tools/verify_plugin_abi.py $(TARGET_ELF)
+	@python ../tools/verify_plugin.py $(TARGET_ELF) "$(CODEBIN)" "$(PATCHED)"
 
-$(TARGET).3gx: $(TARGET).elf plugin.json
-	@python ../tools/mk3gx.py $(TARGET).elf $(BUILD)/plugin.json $@
+$(TARGET_3GX): $(TARGET_ELF) plugin.json
+	@python ../tools/mk3gx.py $(TARGET_ELF) $(BUILD)/plugin.json $@
 
 $(BUILD)/plugin.json: plugin.json | $(BUILD)
 	@python -c "import json; i=json.load(open('plugin.json')); i['targets']=['0x'+t for t in '$(TITLE_IDS)'.split()]; i['title']='SaltySD $(IDENTITY)'; json.dump(i,open('$(BUILD)/plugin.json','w'))"
 
-$(TARGET).3gx: $(BUILD)/plugin.json
+$(TARGET_3GX): $(BUILD)/plugin.json
 
 clean:
-	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).3gx $(SOURCES)/patches.h
+	@rm -rf $(BUILD)

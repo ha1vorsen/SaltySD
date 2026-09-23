@@ -13,6 +13,7 @@
 *.3gx
 
 # generated build directories
+/smash/build/
 /smash/bin/
 /smash/resource_mod/build/
 /smash/plugin/build/
@@ -26,5 +27,6 @@
 /smash/plugin/source/patches.h
 
 # helpers
+/smash/.private/
 *.ps1
 *.dmp

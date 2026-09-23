@@ -4,9 +4,9 @@ SaltySD is a collection of modifications for 3DS ROMs which allows them to load 
 
 **Currently Supported Games**
 
- * Smash 3DS (SaltySD v1.2)
+ * Smash 3DS (SaltySD v2.0)
  * Pokemon Sun and Moon (SaltySD v1.2)
  * Pokemon Ultra Sun and Ultra Moon (SaltySD v1.0)
 
-Files are redirected into their own directory under sdmc:/saltysd/ based on the subdirectory name in the respository (ie Smash 3DS loads it's override files from sdmc:/saltysd/smash/). Patching instructions can be found in the PATCHING.md files in each subdirectory.
+Files are redirected into their own directory under sdmc:/saltysd/ based on the subdirectory name in the respository (i.e. Pokemon Sun and Moon load their override files from sdmc:/saltysd/SunMoon/). Smash is a unique case here, so for further information, patching instructions can be found in the PATCHING.md files in each subdirectory.
 

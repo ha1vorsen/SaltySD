@@ -1,8 +1,8 @@
 .arm.little
 
-.open "code_saltysd.bin",0x100000
+.open "build/code_saltysd.bin",0x100000
 
-.include "common.armips.asm"
+.include "build/common.armips.asm"
 
 SALTYSD_DEBUG equ (0)
 

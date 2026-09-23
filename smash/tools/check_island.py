@@ -16,11 +16,11 @@ ISLAND_HOOKS = 0x220
 
 
 def island_bounds():
-    symbols = read_armips_symbols("bin/cro_redir.sym")
+    symbols = read_armips_symbols("build/bin/cro_redir.sym")
     if "saltysd_hook_end" not in symbols:
         raise SystemExit("missing armips symbol: saltysd_hook_end")
     try:
-        start = read_armips_equ("common.armips.asm", "cro_fighter_new") + ISLAND_OFFS
+        start = read_armips_equ("build/common.armips.asm", "cro_fighter_new") + ISLAND_OFFS
     except ValueError as error:
         raise SystemExit(str(error))
     end = symbols["saltysd_hook_end"]
@@ -32,7 +32,7 @@ def main():
         raise SystemExit('usage: check_island.py <pristine code.bin> <patched code.bin>')
     pristine = open(sys.argv[1], "rb").read()
     patched = open(sys.argv[2], "rb").read()
-    sdbgm = open("bin/island_sdbgm.bin", "rb").read()
+    sdbgm = open("build/bin/island_sdbgm.bin", "rb").read()
 
     island, hook_end = island_bounds()
     at = island + ISLAND_SDBGM - BASE

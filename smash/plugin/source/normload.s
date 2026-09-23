@@ -7,7 +7,7 @@
     blx r6
 .endm
 
-.include "common.asm"
+.include "build/common.asm"
 .equ base_addr,     0x0
 
 .equ saltysd_build_prefix,  0x07000110
