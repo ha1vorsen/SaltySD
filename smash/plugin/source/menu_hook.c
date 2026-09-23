@@ -1,8 +1,7 @@
 #include "common.h"
 #include "status.h"
 
-typedef unsigned char u8;
-typedef unsigned int  u32;
+#include "types.h"
 
 #define CRO_MAGIC_OFFS      0x80
 #define CRO_NAME_OFFS       0x84
@@ -14,12 +13,11 @@ typedef unsigned int  u32;
 #define STATE_NOTICES       0x6F
 #define STATE_MAIN_MENU     0x3
 
-#define ISLAND_MENU_TRAMP   (cro_fighter_new_ADDR + 0x3C4 + 0x220 + 0xC)
-
 #define SIG_WORDS           15
 #define SIG_SITE_OFFS       0x2C
 #define BL_MASK             0xFF000000u
 #define BL_AL               0xEB000000u
+#define IMPORT_VENEER       0xE51FF004u
 
 static const u32 menu_sig[SIG_WORDS] = {
     0xE28400A0, BL_AL,      0xE58D0000, 0xE3A00003, 0xE58D0004, 0xE28D2004,
@@ -27,13 +25,12 @@ static const u32 menu_sig[SIG_WORDS] = {
     0xE2840058, BL_AL,      0xE350004A,
 };
 
-u32 saltysd_menu_orig;
-
 void host_menu_run(void);
 
 static int is_menu(const char *name)
 {
-    return name[0] == 'm' && name[1] == 'e' && name[2] == 'n' && name[3] == 'u' && !name[4];
+    return name[0] == 'm' && name[1] == 'e' &&
+           name[2] == 'n' && name[3] == 'u' && !name[4];
 }
 
 static int sig_at(const u32 *at)
@@ -48,17 +45,14 @@ static int sig_at(const u32 *at)
 
 static u32 bl_target(u32 site, u32 word)
 {
-    int imm = (int)(word << 8) >> 8;
-    return site + 8 + (u32)(imm * 4);
+    int displacement = (int)(word << 8) >> 8;
+    return site + 8 + (u32)(displacement * 4);
 }
 
-static u32 bl_to(u32 site, u32 target)
+static void set_menu_site(u32 base)
 {
-    return BL_AL | (((target - (site + 8)) >> 2) & 0x00FFFFFFu);
-}
+    saltysd_status.menu_site = 0;
 
-static void install(u32 base)
-{
     u32 code = *(u32 *)(base + CRO_CODE_OFFS);
     u32 size = *(u32 *)(base + CRO_CODE_SIZE_OFFS);
     if (size < SIG_WORDS * 4)
@@ -75,27 +69,31 @@ static void install(u32 base)
         return;
 
     u32 site = found + SIG_SITE_OFFS;
-    volatile u32 *word = (volatile u32 *)site;
-    u32 hook = bl_to(site, ISLAND_MENU_TRAMP);
+    u32 before = *(const volatile u32 *)site;
 
-    if (*word == hook)
+    if ((before & BL_MASK) != BL_AL)
         return;
 
-    int dist = (int)(ISLAND_MENU_TRAMP - (site + 8));
-    if (dist < -0x2000000 || dist >= 0x2000000)
+    u32 veneer = bl_target(site, before);
+    if (veneer < code || veneer > code + size - 8)
+        return;
+    if (*(const volatile u32 *)veneer != IMPORT_VENEER)
         return;
 
-    saltysd_menu_orig = bl_target(site, *word);
-    *word = hook;
+    u32 target = *(const volatile u32 *)(veneer + 4) & ~1u;
+    if (target != menu_hook_site_ADDR)
+        return;
+
     saltysd_status.menu_site = site;
-
-    __asm__ volatile ("svc 0x92" ::: "r0", "r1", "r2", "r3", "r12", "memory");
-    __asm__ volatile ("svc 0x94" ::: "r0", "r1", "r2", "r3", "r12", "memory");
 }
 
 void *saltysd_cro_loaded(void *request)
 {
     if (!request)
+        return request;
+
+    u32 status = *((u32 *)request + 2);
+    if (status & 0x80000000u)
         return request;
 
     u32 base = *(u32 *)request;
@@ -111,14 +109,16 @@ void *saltysd_cro_loaded(void *request)
         name += base;
 
     if (is_menu((const char *)name))
-        install(base);
+        set_menu_site(base);
 
     return request;
 }
 
-u32 saltysd_menu_state(u32 state)
+u32 saltysd_menu_state(u32 state, u32 caller)
 {
-    if (state != STATE_NOTICES)
+    if (!saltysd_status.menu_site ||
+        caller != saltysd_status.menu_site + 4 ||
+        state != STATE_NOTICES)
         return state;
 
     saltysd_status.menu_opens++;

@@ -17,7 +17,7 @@ _start:
     b       saltysd_menu_hook
 
 plugin_start:
-    push    {r0-r11, lr}
+    push    {r0-r12, lr}
 
     ldr     r0, =__bss_start__
     ldr     r1, =__bss_end__
@@ -28,7 +28,7 @@ plugin_start:
 
     bl      plugin_main
 
-    pop     {r0-r11, lr}
+    pop     {r0-r12, lr}
     bx      lr
 
 .pool

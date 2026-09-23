@@ -6,6 +6,10 @@
 
 SALTYSD_DEBUG equ (0)
 
+CRO_FAILURE_MISSING equ (0x80000001)
+CRO_FAILURE_ALLOC equ (0x80000002)
+CRO_FAILURE_LOAD equ (0x80000100)
+
 LOAD_OBJECT_LIST equ (0x8)
 BUFFER_LOAD_ADDR equ (0x0)
 BUFFER_PPREV equ (0x18)
@@ -67,6 +71,18 @@ cro_file_hook:
 cro_file_return:
 .org cro_file_hook_loc
 cro_sarc_skip:
+
+; Finish failed CRO requests
+.org cro_file_size_hook_loc+0x4
+   beq cro_worker_fail_missing
+.org cro_file_size_hook_loc+0x1C
+   bl cro_raw_alloc
+.org cro_file_size_hook_loc+0x28
+   beq cro_worker_fail_alloc
+.org cro_file_hook_loc-0x10
+   bl cro_load_setup
+.org cro_file_hook_loc-0x4
+   bne cro_worker_fail_loaded
 
 ; Patch CRO object new function
 .org cro_fighter_new
@@ -229,7 +245,7 @@ cro_get_new_str:
 
 get_proj_new:
    push {r1-r7, lr}
-      sub sp, sp, #0x4
+      sub sp, sp, #0x8
       mov r5, r0 ; ID
 
       ldr r0, =0x100
@@ -260,7 +276,7 @@ get_proj_new:
       bl sprintf
 
       mov r0, r7
-      add sp, sp, #0x4
+      add sp, sp, #0x8
    pop {r1-r7, pc}
 
 get_chr_new:
@@ -295,7 +311,7 @@ cro_get_size_str:
 
 get_proj_size:
    push {r1-r7, lr}
-      sub sp, sp, #0x4
+      sub sp, sp, #0x8
       mov r5, r0 ; ID
 
       ldr r0, =0x100
@@ -326,7 +342,7 @@ get_proj_size:
       bl sprintf
 
       mov r0, r7
-      add sp, sp, #0x4
+      add sp, sp, #0x8
    pop {r1-r7, pc}
 
 get_chr_size:
@@ -385,7 +401,11 @@ FIGHTER_DATA_FUNC equ (FIGHTER_DATA_SHIFT-0x14)
 
 ; Load get_fighter_data_* exports from CROs at runtime
 .org get_fighter_data
-   push {r1-r8, lr}
+get_fighter_data_redirect:
+   ; Keep special fighter IDs on the original path
+   cmp r1, #0x41
+   bhs get_fighter_data_stock_default
+   push {r1-r9, lr}
       sub sp, sp, #FIGHTER_DATA_SHIFT
       str r0, [sp, #FIGHTER_DATA_OUT]
       str r1, [sp, #FIGHTER_DATA_ID]
@@ -413,17 +433,21 @@ FIGHTER_DATA_FUNC equ (FIGHTER_DATA_SHIFT-0x14)
       ldr r2, [sp, #FIGHTER_DATA_UNK]
       ldr r3, [sp, #FIGHTER_DATA_FUNC]
       
+fighter_data_lookup_result:
       cmp r3, #0x0
-      beq fighter_data_failed
+      beq fighter_data_stock_case
       blx r3
       
       add sp, sp, #FIGHTER_DATA_SHIFT
-   pop {r1-r8, pc}
-   
-fighter_data_failed:
-      ldr r0, =0x1234567
-      str r0, [r0]
-      b fighter_data_failed
+   pop {r1-r9, pc}
+
+; Fall back to the original fighter handler
+fighter_data_stock_case:
+   add sp, sp, #FIGHTER_DATA_SHIFT
+   pop {r1-r9, lr}
+   ldr r12, =get_fighter_data_stock_cases
+   add r12, r12, r1, lsl #3
+   bx r12
 
 cro_get_fighter_data_str:
    push {r1-r7, lr}
@@ -463,7 +487,8 @@ FIGHTER_SPECIALIZER_FUNC equ (FIGHTER_SPECIALIZER_SHIFT-0x14)
 
 ; Load get_fighter_specializer_* exports from CROs at runtime
 .org get_fighter_specializer
-   push {r1-r8, lr}
+get_fighter_specializer_redirect:
+   push {r1-r9, lr}
       sub sp, sp, #FIGHTER_SPECIALIZER_SHIFT
       str r0, [sp, #FIGHTER_SPECIALIZER_OUT]
       str r1, [sp, #FIGHTER_SPECIALIZER_ID]
@@ -496,7 +521,7 @@ FIGHTER_SPECIALIZER_FUNC equ (FIGHTER_SPECIALIZER_SHIFT-0x14)
       blxne r3
       
       add sp, sp, #FIGHTER_SPECIALIZER_SHIFT
-   pop {r1-r8, pc}
+   pop {r1-r9, pc}
 
 cro_get_fighter_specializer_str:
    push {r1-r7, lr}
@@ -597,7 +622,8 @@ WEAPON_DATA_FUNC equ (WEAPON_DATA_SHIFT-0x10)
 
 ; Load get_weapon_data_* exports from CROs at runtime
 .org get_weapon_data
-   push {r1-r8, lr}
+get_weapon_data_redirect:
+   push {r1-r9, lr}
       sub sp, sp, #WEAPON_DATA_SHIFT
       str r0, [sp, #WEAPON_DATA_THIS]
       str r1, [sp, #WEAPON_DATA_ID]
@@ -628,11 +654,11 @@ WEAPON_DATA_FUNC equ (WEAPON_DATA_SHIFT-0x10)
       blxne r3
       
       add sp, sp, #WEAPON_DATA_SHIFT
-   pop {r1-r8, pc}
+   pop {r1-r9, pc}
 
 cro_get_weapon_data_str:
    push {r1-r7, lr}
-      sub sp, sp, #0x4
+      sub sp, sp, #0x8
       mov r5, r0 ; ID
 
       ldr r0, =0x100
@@ -662,7 +688,7 @@ cro_get_weapon_data_str:
       bl sprintf
 
       mov r0, r7
-      add sp, sp, #0x4
+      add sp, sp, #0x8
    pop {r1-r7, pc}
 
 .align 4
@@ -677,9 +703,12 @@ WEAPON_SPECIALIZER_STR equ (WEAPON_SPECIALIZER_SHIFT-0x8)
 WEAPON_SPECIALIZER_CRO equ (WEAPON_SPECIALIZER_SHIFT-0xC)
 WEAPON_SPECIALIZER_FUNC equ (WEAPON_SPECIALIZER_SHIFT-0x10)
 
+WSPEC_TABLE_FIRST equ ((wspec_patch_end - (get_weapon_specializer+0x1C)) / 4)
+
 ; Load get_weapon_specializer_* exports from CROs at runtime
 .org get_weapon_specializer
-   push {r1-r8, lr}
+get_weapon_specializer_redirect:
+   push {r1-r9, lr}
       sub sp, sp, #WEAPON_SPECIALIZER_SHIFT
       str r0, [sp, #WEAPON_SPECIALIZER_THIS]
       str r1, [sp, #WEAPON_SPECIALIZER_ID]
@@ -710,9 +739,37 @@ WEAPON_SPECIALIZER_FUNC equ (WEAPON_SPECIALIZER_SHIFT-0x10)
       blxne r3
       
       add sp, sp, #WEAPON_SPECIALIZER_SHIFT
-   pop {r1-r8, pc}
+   pop {r1-r9, pc}
    
 weapon_specializer_default:
+      ; Restore the original dispatch when the export is missing
+      cmp r1, #0xC2
+      beq wspec_orig_eq
+      bgt wspec_orig_gt
+      cmp r1, #WSPEC_TABLE_FIRST
+      bhs wspec_orig_lo
+      b wspec_stock
+
+wspec_orig_eq:
+      add sp, sp, #WEAPON_SPECIALIZER_SHIFT
+      pop {r1-r9, lr}
+      push {r4, lr}
+      b get_weapon_specializer_eq
+
+wspec_orig_gt:
+      add sp, sp, #WEAPON_SPECIALIZER_SHIFT
+      pop {r1-r9, lr}
+      push {r4, lr}
+      b get_weapon_specializer_gt
+
+wspec_orig_lo:
+      add sp, sp, #WEAPON_SPECIALIZER_SHIFT
+      pop {r1-r9, lr}
+      push {r4, lr}
+      ldr r2, =(get_weapon_specializer+0x1C)
+      ldr pc, [r2, r1, lsl #2]
+
+wspec_stock:
       ldr r0, =weapon_specializer_thing1 ; TODO
       ldr r0, [r0]
       tst r0, #1
@@ -728,11 +785,11 @@ weapon_specializer_default:
 loc_98309C:
       ldr r0, =weapon_specializer_thing2
       add sp, sp, #WEAPON_SPECIALIZER_SHIFT
-   pop {r1-r8, pc}
+   pop {r1-r9, pc}
 
 cro_get_weapon_specializer_str:
    push {r1-r7, lr}
-      sub sp, sp, #0x4
+      sub sp, sp, #0x8
       mov r5, r0 ; ID
 
       ldr r0, =0x100
@@ -762,13 +819,14 @@ cro_get_weapon_specializer_str:
       bl sprintf
 
       mov r0, r7
-      add sp, sp, #0x4
+      add sp, sp, #0x8
    pop {r1-r7, pc}
 
 .align 4
 chr_weapon_specializer_format: .ascii "_ZN3app%uget_weapon_specializer_%s_%sEv",0
 
 .pool
+wspec_patch_end:
 
 
 
@@ -814,19 +872,20 @@ cro_msg_extend:
    
    bx lr
 
-STACK_SHIFT equ (0x40)   
+SIZE_STACK_SHIFT equ (0x44)
+FILE_STACK_SHIFT equ (0x40)
 
-FILE_HANDLE equ (STACK_SHIFT-0x0)
-ORIG_SIZE equ (STACK_SHIFT-0x4)
-CRO_ALLOC equ (STACK_SHIFT-0x8)
-CRO_SIZE equ (STACK_SHIFT-0xC)
-CRO_PATH equ (STACK_SHIFT-0x10)
-FILE_PATH equ (STACK_SHIFT-0x14)
-BYTES_READ equ (STACK_SHIFT-0x18)
+FILE_HANDLE equ (0x0)
+ORIG_SIZE equ (0x4)
+CRO_ALLOC equ (0x8)
+CRO_SIZE equ (0xC)
+CRO_PATH equ (0x10)
+FILE_PATH equ (0x14)
+BYTES_READ equ (0x18)
 
 cro_file_size_intercept:
    push {r1-r6, lr}
-      sub sp, sp, #STACK_SHIFT
+      sub sp, sp, #SIZE_STACK_SHIFT
 
       ; Get a pointer to our CRO sarc path
       add r1, r4, #0x20
@@ -835,6 +894,8 @@ cro_file_size_intercept:
       ldr r0, =0x404
       bl liballoc
       str r0, [sp, #FILE_HANDLE]
+      cmp r0, #0x0
+      beq size_close_and_end
       add r0, r0, #0x100
       str r0, [sp, #FILE_PATH]
       
@@ -885,7 +946,7 @@ size_close_and_bypass:
       bl libdealloc
       
       ldr r0, [sp, #ORIG_SIZE]
-      add sp, sp, #STACK_SHIFT
+      add sp, sp, #SIZE_STACK_SHIFT
    pop {r1-r6, lr}
    b cro_file_size_skip
 
@@ -893,7 +954,7 @@ size_close_and_end:
       ldr r0, [sp, #FILE_HANDLE]
       bl libdealloc
       
-      add sp, sp, #STACK_SHIFT
+      add sp, sp, #SIZE_STACK_SHIFT
    pop {r1-r6, lr}
 
    ldr r1, [r4, #0xC]
@@ -904,7 +965,7 @@ size_close_and_end:
 ; it into the game if it does
 cro_file_intercept:
    push {r0-r4, lr}
-      sub sp, sp, #STACK_SHIFT
+      sub sp, sp, #FILE_STACK_SHIFT
       
       ; Get a pointer to our CRO sarc path
       add r1, r4, #0x20
@@ -914,6 +975,8 @@ cro_file_intercept:
       ldr r0, =0x404
       bl liballoc
       str r0, [sp, #FILE_HANDLE]
+      cmp r0, #0x0
+      beq close_and_end
       add r0, r0, #0x100
       str r0, [sp, #FILE_PATH]
       
@@ -962,7 +1025,7 @@ cro_file_intercept:
       ldr r0, [sp, #FILE_HANDLE]
       bl libdealloc
       
-      add sp, sp, #STACK_SHIFT
+      add sp, sp, #FILE_STACK_SHIFT
    pop {r0-r4, lr}
 
    b cro_sarc_skip      
@@ -970,7 +1033,7 @@ close_and_end:
       ldr r0, [sp, #FILE_HANDLE]
       bl libdealloc
       
-      add sp, sp, #STACK_SHIFT
+      add sp, sp, #FILE_STACK_SHIFT
    pop {r0-r4, lr}
    mov r1, r7
    b cro_file_return
@@ -996,10 +1059,12 @@ cro_debug_emit:
 
 .align 4
 sdmc:       .ascii "sdmc:",0
+.if SALTYSD_DEBUG
 .align 4
 meme: .ascii "file exists",0
 .align 4
 meme2: .ascii "file override",0
+.endif
 
 .pool
 
@@ -1007,14 +1072,117 @@ meme2: .ascii "file override",0
    bl saltysd_cro_post
 .org cro_post_hook_loc_2
    bl saltysd_cro_post
+.org cro_minigame_load_hook_loc
+   bl cro_minigame_load_checked
 
 .org saltysd_island+0x220
 saltysd_cro_post:
-   mov r0, r4
-   .word 0xE51FF004
-   .word 0x07000118
+   b saltysd_cro_post_body
+.org saltysd_island+0x22C
 saltysd_menu_tramp:
    .word 0xE51FF004
    .word 0x0700011C
+
+saltysd_cro_post_body:
+   push {r4, lr}
+   mov r0, r4
+   ldr r12, =0x07000118
+   blx r12
+   ldr r0, [r4, #0x8]
+   tst r0, #0x80000000
+   beq saltysd_cro_post_done
+
+   ; Unlink failed requests instead of queuing them for unload
+   mov r0, r6
+   bl crit_enter
+   ldr r0, [r4, #0x10]
+   cmp r0, #0x0
+   beq saltysd_cro_failure_bad_refcount
+   subs r0, r0, #0x1
+   strne r0, [r4, #0x10]
+   bne saltysd_cro_failure_release
+
+   ldr r1, [r4, #0x18]
+   ldr r0, [r4, #0x1C]
+   cmp r1, #0x0
+   strne r0, [r1, #0x1C]
+   streq r0, [r5, #0x8]
+   cmp r0, #0x0
+   strne r1, [r0, #0x18]
+   mov r0, r6
+   bl crit_leave
+   mov r0, r4
+   bl cro_request_free
+   b saltysd_cro_failure_return
+
+saltysd_cro_failure_release:
+   mov r0, r6
+   bl crit_leave
+saltysd_cro_failure_return:
+   mov r0, #0x0
+   pop {r4, pc}
+
+saltysd_cro_failure_bad_refcount:
+   mov r0, r6
+   bl crit_leave
+   bl cro_failure_panic
+saltysd_cro_failure_bad_refcount_halt:
+   b saltysd_cro_failure_bad_refcount_halt
+
+saltysd_cro_post_done:
+   mov r0, r4
+   pop {r4, pc}
+
+cro_worker_fail_missing:
+   ldr r0, =CRO_FAILURE_MISSING
+   mov r1, #0x0
+   mov r2, #0x0
+   b cro_worker_fail_publish
+
+cro_worker_fail_alloc:
+   ldr r0, =CRO_FAILURE_ALLOC
+   ldr r1, [r7, #0x8]
+   add r1, r1, #0xC00
+   add r1, r1, #0x3FC
+   mov r2, #0x0
+   b cro_worker_fail_publish
+
+cro_worker_fail_loaded:
+   rsb r0, r0, #0x0
+   ldr r1, =CRO_FAILURE_LOAD
+   orr r0, r0, r1
+   ldr r1, [r7, #0x8]
+   add r1, r1, #0xC00
+   add r1, r1, #0x3FC
+   mov r2, r8
+   push {r0-r2, lr}
+   mov r0, r8
+   bl cro_raw_free
+   pop {r0-r2, lr}
+
+cro_worker_fail_publish:
+   str r1, [r4, #0x0]
+   str r2, [r4, #0x4]
+   str r0, [r4, #0x8]
+   mov r0, #0x0
+   str r0, [r4, #0x14]
+   b cro_file_size_hook_loc-0x30
+
+; Match the menu caller's failed-load handling
+cro_minigame_load_checked:
+   push {r4, lr}
+   bl cro_blocking_load
+   cmp r0, #0x0
+   bne cro_minigame_load_checked_done
+   bl cro_failure_panic
+cro_minigame_load_checked_unexpected_return:
+   b cro_minigame_load_checked_unexpected_return
+cro_minigame_load_checked_done:
+   pop {r4, pc}
+cro_minigame_load_checked_end:
+
+.pool
+saltysd_hook_end:
+
 
 .Close

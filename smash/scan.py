@@ -9,6 +9,15 @@ def r32(data, pos):
     except:
         return struct.unpack('<I', data[pos:pos+4])[0]
 
+def arm_branch_target(data, pos):
+    word = r32(data, pos)
+    if ((word >> 25) & 0x7) != 0x5:
+        raise ValueError("expected ARM branch at file offset " + hex(pos))
+    imm = word & 0x00FFFFFF
+    if imm & 0x00800000:
+        imm -= 0x01000000
+    return 0x100000 + pos + 8 + (imm << 2)
+
 crc_sig = b2str([0xD0, 0x10, 0xD0, 0xE1, 0x00, 0x20, 0xE0, 0xE3, 0x00, 0x00, 0x51, 0xE3, 0x30, 0x30, 0x9F, 0x15])
 mount_sdmc_sig = b2str([0x38, 0x40, 0x2D, 0xE9, 0x00, 0x40, 0xA0, 0xE1, 0x09, 0x10, 0xA0, 0xE3, 0x0D, 0x00, 0xA0, 0xE1])
 unmount_path_sig = b2str([0x30, 0x40, 0x2D, 0xE9, 0x0C, 0xD0, 0x4D, 0xE2, 0x00, 0x20, 0xA0, 0xE3, 0x0D, 0x30, 0xA0, 0xE1])
@@ -51,9 +60,19 @@ cro_load_sig = b2str([0xF0, 0x41, 0x2D, 0xE9, 0x00, 0x50, 0x90, 0xE5, 0x18, 0x00
 cro_file_size_sig = b2str([0x00, 0xF0, 0x20, 0xE3, 0xF1, 0xFF, 0xFF, 0x0A, 0x08, 0x00, 0x90, 0xE5])
 cro_load_object_sig = b2str([0x7C, 0x40, 0x9F, 0xE5, 0x00, 0x00, 0x94, 0xE5, 0x00, 0x00, 0x50, 0xE3, 0x05, 0x00, 0x00, 0x1A])
 cro_fighter_new_sig = b2str([0x10, 0x40, 0x2D, 0xE9, 0xB0, 0x22, 0xD0, 0xE5, 0x00, 0x40, 0xA0, 0xE1])
+menu_state_apply_sig = b2str([
+    0x14, 0x10, 0xA0, 0xE3, 0x00, 0x00, 0xA0, 0xE1,
+    0x40, 0x20, 0x90, 0xE5, 0x02, 0x11, 0x80, 0xE7,
+    0x01, 0x10, 0xA0, 0xE3, 0x44, 0x10, 0xC0, 0xE5,
+    0x1E, 0xFF, 0x2F, 0xE1,
+])
 cro_unk_1_sig = b2str([0x38, 0x20, 0x9F, 0xE5, 0x14, 0x10, 0x90, 0xE5, 0x00, 0x20, 0x80, 0xE5])
 cro_proj_sig = b2str([0x65, 0x6E, 0x65, 0x6D, 0x79, 0x00, 0x00, 0x00, 0x6D, 0x6F, 0x64, 0x65])
 cro_cro_name_sig = b2str([0x30, 0x10, 0x9F, 0xE5, 0x3A, 0x00, 0x50, 0xE3, 0x3C, 0x00, 0x91, 0x05])
+cro_raw_free_sig = b2str([0x00, 0x00, 0x50, 0xE3, 0x1E, 0xFF, 0x2F, 0x01, 0x70, 0x40, 0x2D, 0xE9, 0x00, 0x40, 0xA0, 0xE1, 0xB2, 0x5E, 0xFE, 0xEB, 0x04, 0x50, 0xA0, 0xE1, 0x00, 0x60, 0xA0, 0xE1])
+cro_queue_submit_sig = b2str([0x00, 0x00, 0x90, 0xE5, 0x20, 0x00, 0x90, 0xE5, 0x00, 0x00, 0xA0, 0xE1, 0xF0, 0x41, 0x2D, 0xE9, 0x00, 0x40, 0xA0, 0xE1])
+cro_menu_name_sig = b2str([0x6D, 0x65, 0x6E, 0x75, 0x2F, 0x6D, 0x65, 0x6E, 0x75, 0x00])
+cro_minigame_name_sig = b2str([0x6D, 0x69, 0x6E, 0x69, 0x67, 0x61, 0x6D, 0x65, 0x2F, 0x6D, 0x69, 0x6E, 0x69, 0x67, 0x61, 0x6D, 0x65, 0x00])
 sprintf_sig = b2str([0x0F, 0x00, 0x2D, 0xE9, 0x10, 0x40, 0x2D, 0xE9, 0x00, 0x40, 0xA0, 0xE1, 0x0C, 0x20, 0x9D, 0xE5])
 get_fighter_data_sig = b2str([0x01, 0x10, 0x81, 0xE2, 0x10, 0x10, 0x80, 0xE5, 0x1E, 0xFF, 0x2F, 0xE1, 0x41, 0x00, 0x51, 0xE3]) # TODO: This includes a fighter count in the sig, 0x41
 get_fighter_specializer_sig = b2str([0x00, 0x00, 0x80, 0x3F, 0x41, 0x00, 0x51, 0xE3, 0x01, 0xF1, 0x9F, 0x37, 0xC2, 0x00, 0x00, 0xEA])
@@ -92,6 +111,18 @@ try:
     f = open(sys.argv[1], 'r', encoding='latin-1', newline="").read()
 except TypeError:
     f = open(sys.argv[1], 'rb').read()
+
+menu_state_apply_offs = f.find(menu_state_apply_sig)
+if (menu_state_apply_offs < 0 or
+        f.find(menu_state_apply_sig, menu_state_apply_offs + 1) >= 0):
+    raise ValueError("menu state apply function is not a unique match")
+
+# menu.cro imports the entry at +8
+menu_state_apply_addr = menu_state_apply_offs + 0x100000
+menu_hook_site_addr = menu_state_apply_addr + 8
+menu_hook_word = r32(f, menu_hook_site_addr - 0x100000)
+if menu_hook_word != 0xE5902040:
+    raise ValueError("menu export has an unknown displaced instruction")
     
 common = open('common.asm','w')
 common_armips = open('common.armips.asm','w')
@@ -186,19 +217,59 @@ print("cro_msg_hook_loc equ (" + hex(f.index(cro_load_sig, f.find(cro_load_sig)+
 print("cro_post_hook_loc equ (" + hex(f.index(cro_load_sig, f.find(cro_load_sig)+len(cro_load_sig))+4+0xFC+0x100000) + ")", file=common_armips)
 print("cro_file_size_hook_loc equ (" + hex(f.find(cro_file_size_sig)+0x100000) + ")", file=common_armips)
 print("cro_file_hook_loc equ (" + hex(f.find(cro_file_size_sig)+0xA8+0x100000) + ")", file=common_armips)
+print("cro_raw_alloc equ (" + hex(arm_branch_target(f, f.find(cro_file_size_sig)+0x1C)) + ")", file=common_armips)
+print("cro_load_setup equ (" + hex(arm_branch_target(f, f.find(cro_file_size_sig)+0x98)) + ")", file=common_armips)
+print("cro_raw_free equ (" + hex(f.find(cro_raw_free_sig)+0x100000) + ")", file=common_armips)
+print("cro_queue_submit equ (" + hex(f.find(cro_queue_submit_sig)+0x100000) + ")", file=common_armips)
+print("cro_request_free equ (" + hex(arm_branch_target(f, f.find(cro_file_size_sig)+0x1BC)) + ")", file=common_armips)
+
+_menu_name = f.find(cro_menu_name_sig)
+_minigame_name = f.find(cro_minigame_name_sig)
+if _menu_name == -1 or f.find(cro_menu_name_sig, _menu_name + 1) != -1:
+    raise ValueError("expected exactly one menu/menu CRO caller string")
+if _minigame_name == -1 or f.find(cro_minigame_name_sig, _minigame_name + 1) != -1:
+    raise ValueError("expected exactly one minigame/minigame CRO caller string")
+_menu_panic_call = _menu_name - 0x4
+_minigame_load_call = _minigame_name - 0x28
+if (r32(f, _minigame_load_call - 0x8) != 0xE3A01000 or
+        r32(f, _minigame_load_call - 0x4) != 0xE28F0024 or
+        r32(f, _minigame_load_call + 0x4) != 0xE584006C):
+    raise ValueError("minigame CRO caller no longer matches the audited load/store sequence")
+print("cro_minigame_load_hook_loc equ (" + hex(_minigame_load_call+0x100000) + ")", file=common_armips)
+print("cro_blocking_load equ (" + hex(arm_branch_target(f, _minigame_load_call)) + ")", file=common_armips)
+print("cro_failure_panic equ (" + hex(arm_branch_target(f, _menu_panic_call)) + ")", file=common_armips)
 print("cro_load_object_adj_loc equ (" + hex(f.find(cro_load_object_sig)+0x10+0x100000) + ")", file=common_armips)
 print("cro_load_object equ (" + hex(r32(f, f.find(cro_load_object_sig)+0x84)) + ")", file=common_armips)
 print("cro_fighter_new equ (" + hex(f.find(cro_fighter_new_sig)+0x100000) + ")", file=common_armips)
+print("menu_hook_site equ (" + hex(menu_hook_site_addr) + ")", file=common_armips)
 print("cro_unk_1 equ (" + hex(f.find(cro_unk_1_sig)+0x100000) + ")", file=common_armips)
 print("projectile_table_ptr equ (" + hex(f.find(cro_proj_sig)-0xC+0x100000) + ")", file=common_armips)
 print("projectile_prefix_table_ptr equ (" + hex(f.find(cro_proj_sig)-0x8+0x100000) + ")", file=common_armips)
 print("cro_cro_name equ (" + hex(f.find(cro_cro_name_sig)+0x100000) + ")", file=common_armips)
 print("character_id_to_lowercase equ (" + hex(f.find(cro_cro_name_sig)+0x3c+0x100000) + ")", file=common_armips)
 print("sprintf equ (" + hex(f.find(sprintf_sig)+0x100000) + ")", file=common_armips)
-print("get_fighter_data equ (" + hex(f.find(get_fighter_data_sig)+0xC+0x100000) + ")", file=common_armips)
+_fighter_data = f.find(get_fighter_data_sig) + 0xC
+_fighter_data_va = _fighter_data + 0x100000
+_fighter_data_cases = _fighter_data_va + 0x110
+_fighter_data_default = _fighter_data_va + 0x318
+if (r32(f, _fighter_data) != 0xE3510041 or
+        r32(f, _fighter_data + 0x4) != 0x379FF101 or
+        arm_branch_target(f, _fighter_data + 0x8) != _fighter_data_default):
+    raise ValueError("get_fighter_data no longer has the audited range/default dispatch")
+for _fighter_id in range(0x41):
+    if r32(f, _fighter_data + 0xC + _fighter_id * 4) != _fighter_data_cases + _fighter_id * 8:
+        raise ValueError("get_fighter_data case table is not the audited 0x41-entry layout")
+print("get_fighter_data equ (" + hex(_fighter_data_va) + ")", file=common_armips)
+print("get_fighter_data_stock_cases equ (" + hex(_fighter_data_cases) + ")", file=common_armips)
+print("get_fighter_data_stock_default equ (" + hex(_fighter_data_default) + ")", file=common_armips)
 print("get_fighter_specializer equ (" + hex(f.find(get_fighter_specializer_sig)+0x4+0x100000) + ")", file=common_armips)
 print("get_weapon_data equ (" + hex(f.find(get_weapon_data_sig)+0x100000) + ")", file=common_armips)
 print("get_weapon_specializer equ (" + hex(f.find(get_weapon_specializer_sig)+0x100000) + ")", file=common_armips)
+
+# Save the original weapon-specializer branches
+_wspec = f.find(get_weapon_specializer_sig)
+print("get_weapon_specializer_eq equ (" + hex(arm_branch_target(f, _wspec+0x8)) + ")", file=common_armips)
+print("get_weapon_specializer_gt equ (" + hex(arm_branch_target(f, _wspec+0xC)) + ")", file=common_armips)
 print("weapon_data_default equ (" + hex(f.find(weapon_data_default_sig)+0x14+0x100000) + ")", file=common_armips)
 print("weapon_specializer_default_case equ (" + hex(f.find(weapon_specializer_default_sig)+0x100000) + ")", file=common_armips)
 print("weapon_specializer_thing1 equ (" + hex(r32(f, f.find(weapon_specializer_default_sig)+0x40)) + ")", file=common_armips)
@@ -243,6 +314,7 @@ print("#define crc_ADDR " + hex(f.find(crc_sig)+0x100000), file=common)
 print("#define vsnprintf_ADDR " + hex(f.find(vsnprintf_sig)+0x100000+1), file=common)
 print("#define get_rf_struct_ADDR " + hex(f.find(get_rf_struct_sig)+0x100000), file=common)
 print("#define cro_fighter_new_ADDR " + hex(f.find(cro_fighter_new_sig)+0x100000), file=common)
+print("#define menu_hook_site_ADDR " + hex(menu_hook_site_addr), file=common)
 print("#define gsp_state_ADDR " + hex(find_gsp_state()), file=common)
 print("#define hid_object_ADDR " + hex(r32(f, f.find(hid_object_sig)+0x14)), file=common)
 print("#define applet_state_ADDR " + hex(find_applet_state()), file=common)
