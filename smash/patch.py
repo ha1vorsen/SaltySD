@@ -26,6 +26,12 @@ def require_match(data, signature, label):
         raise RuntimeError("Couldn't find %s; refusing to patch this code.bin." % label)
     return address
 
+def arm_b(site, target):
+    distance = target - (site + 8)
+    if distance & 3 or distance < -0x2000000 or distance >= 0x2000000:
+        raise RuntimeError("ARM branch target is out of range or unaligned")
+    return struct.pack('<I', 0xEA000000 | ((distance >> 2) & 0x00FFFFFF))
+
 rf_sig = b2str([0x02, 0x10, 0xD0, 0xE5, 0x04, 0x00, 0x51, 0xE3, 0x05, 0x00, 0x00, 0x3A, 0x0C, 0x10, 0x90, 0xE5, 0x04, 0x00, 0x90, 0xE5, 0x00, 0x10, 0x41, 0xE0])
 rf_alloc_sig = b2str([0x1C, 0x00, 0x90, 0xE5, 0x7F, 0x00, 0x80, 0xE2, 0x7F, 0x10, 0xC0, 0xE3, 0xE8, 0x06, 0x9D, 0xE5])
 ls_sig = b2str([0x00, 0x50, 0xA0, 0xE1, 0x44, 0x00, 0x9D, 0xE5, 0x00, 0x40, 0xA0, 0xE3, 0x00, 0x00, 0x50, 0xE3])
@@ -44,13 +50,18 @@ ISLAND_OFFS = 0x3C4
 ISLAND_SIZE = 0x400
 ISLAND_SDBGM = 0x1E0
 ISLAND_HOOKS = 0x220
+BASE = 0x100000
+
+def armips_value(name):
+    src = open('common.armips.asm', encoding='latin-1').read()
+    pattern = r"^%s equ \((0x[0-9a-fA-F]+)\)$" % re.escape(name)
+    match = re.search(pattern, src, re.MULTILINE)
+    if not match:
+        raise RuntimeError("common.armips.asm has no %s; run scan.py first." % name)
+    return int(match.group(1), 16)
 
 def island_base():
-    src = open('common.armips.asm', encoding='latin-1').read()
-    match = re.search(r"cro_fighter_new equ \((0x[0-9a-fA-F]+)", src)
-    if not match:
-        raise RuntimeError("common.armips.asm has no cro_fighter_new; run scan.py first.")
-    return int(match.group(1), 16) - 0x100000 + ISLAND_OFFS
+    return armips_value("cro_fighter_new") - BASE + ISLAND_OFFS
 
 #Make this compatible with Python 2 and 3
 try:
@@ -75,8 +86,13 @@ ls_hook_addr = require_match(f, ls_sig, "LS hook") + 4
 ls_alloc_addr = require_match(f, ls_alloc_sig, "LS allocation hook")
 thread_hook_addr = require_match(f, thread_sig, "thread loader hook")
 norm_hook_addr = require_match(f, norm_sig, "normal loader hook")
+menu_hook_site_addr = armips_value("menu_hook_site") - BASE
+menu_hook_word = r32(f, menu_hook_site_addr)
+if menu_hook_word != 0xE5902040:
+    raise RuntimeError("Menu export has an unknown displaced instruction")
 
 sdbgm_addr = island_base() + ISLAND_SDBGM
+menu_tramp_addr = island_base() + ISLAND_HOOKS + 0xC
 
 if ISLAND_SDBGM + len(sdbgm) > ISLAND_HOOKS:
     raise RuntimeError("The BGM payload does not fit in the island.")
@@ -94,6 +110,9 @@ f = insertreplace(f,rf_alloc,rf_alloc_addr)
 #f = insertreplace(f,ls_alloc,ls_alloc_addr)
 f = insertreplace(f,thread_hook,thread_hook_addr)
 f = insertreplace(f,norm_hook,norm_hook_addr)
+
+f = insertreplace(f, arm_b(menu_hook_site_addr, menu_tramp_addr),
+                  menu_hook_site_addr)
 
 if r32(f, norm_hook_addr-0x58+3) & 0xFF != 0x9A:
     print("It seems Shiny Quagsire was wrong to assume this address shift would always work.")

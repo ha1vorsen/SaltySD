@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 
-import re
 import sys
+
+from arm_stack import read_armips_equ, read_armips_symbols
 
 BASE = 0x100000
 LIBPNG_LO, LIBPNG_HI = 0xA33000, 0xA37000
@@ -12,15 +13,18 @@ ISLAND_OFFS = 0x3C4
 ISLAND_SIZE = 0x400
 ISLAND_SDBGM = 0x1E0
 ISLAND_HOOKS = 0x220
-ISLAND_HOOKS_SIZE = 0x14
 
 
-def island_base():
-    src = open("common.armips.asm", encoding="latin-1").read()
-    match = re.search(r"cro_fighter_new equ \((0x[0-9a-fA-F]+)", src)
-    if not match:
-        raise SystemExit("common.armips.asm has no cro_fighter_new; run scan.py first.")
-    return int(match.group(1), 16) + ISLAND_OFFS
+def island_bounds():
+    symbols = read_armips_symbols("bin/cro_redir.sym")
+    if "saltysd_hook_end" not in symbols:
+        raise SystemExit("missing armips symbol: saltysd_hook_end")
+    try:
+        start = read_armips_equ("common.armips.asm", "cro_fighter_new") + ISLAND_OFFS
+    except ValueError as error:
+        raise SystemExit(str(error))
+    end = symbols["saltysd_hook_end"]
+    return start, end
 
 
 def main():
@@ -30,7 +34,7 @@ def main():
     patched = open(sys.argv[2], "rb").read()
     sdbgm = open("bin/island_sdbgm.bin", "rb").read()
 
-    island = island_base()
+    island, hook_end = island_bounds()
     at = island + ISLAND_SDBGM - BASE
 
     if patched[at:at + len(sdbgm)] != sdbgm:
@@ -48,7 +52,9 @@ def main():
     if pristine[lo:hi] != patched[lo:hi]:
         raise SystemExit("something was written between the BGM payload and the hook stubs.")
 
-    end = ISLAND_HOOKS + ISLAND_HOOKS_SIZE
+    end = hook_end - island
+    if end < ISLAND_HOOKS:
+        raise SystemExit("the CRO hook stubs end before their reserved area.")
     if end > ISLAND_SIZE:
         raise SystemExit("the island is full.")
 
