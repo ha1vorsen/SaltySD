@@ -616,9 +616,6 @@ roy_sword: .ascii "sword",0
 WEAPON_DATA_SHIFT equ (0x20)
 WEAPON_DATA_THIS equ (WEAPON_DATA_SHIFT-0x0)
 WEAPON_DATA_ID equ (WEAPON_DATA_SHIFT-0x4)
-WEAPON_DATA_STR equ (WEAPON_DATA_SHIFT-0x8)
-WEAPON_DATA_CRO equ (WEAPON_DATA_SHIFT-0xC)
-WEAPON_DATA_FUNC equ (WEAPON_DATA_SHIFT-0x10)
 
 ; Load get_weapon_data_* exports from CROs at runtime
 .org get_weapon_data
@@ -627,28 +624,15 @@ get_weapon_data_redirect:
       sub sp, sp, #WEAPON_DATA_SHIFT
       str r0, [sp, #WEAPON_DATA_THIS]
       str r1, [sp, #WEAPON_DATA_ID]
-   
-      ldr r0, =cro_load_object
-      ldr r0, [r0]
-      ldr r0, [r0]
-      ldr r0, [r0, #LOAD_OBJECT_LIST]
-      str r0, [sp, #WEAPON_DATA_CRO]
 
-      ldr r0, [sp, #WEAPON_DATA_ID]
-      bl cro_get_weapon_data_str
-      str r0, [sp, #WEAPON_DATA_STR]
-      
-      add r0, r0, #0x4
-      ldr r1, [sp, #WEAPON_DATA_CRO]
-      bl cro_list_find_func
-      str r0, [sp, #WEAPON_DATA_FUNC]
-      ldr r0, [sp, #WEAPON_DATA_STR]
-      bl libdealloc
-      
+      mov r0, r1
+      ldr r1, =cro_get_weapon_data_str
+      bl cro_find_weapon_export
+      mov r3, r0
+
       ldr r0, [sp, #WEAPON_DATA_THIS]
       ldr r1, [sp, #WEAPON_DATA_ID]
-      ldr r3, [sp, #WEAPON_DATA_FUNC]
-      
+
       cmp r3, #0x0
       ldreq r0, =weapon_data_default
       blxne r3
@@ -657,9 +641,10 @@ get_weapon_data_redirect:
    pop {r1-r9, pc}
 
 cro_get_weapon_data_str:
-   push {r1-r7, lr}
+   push {r1-r9, lr}
       sub sp, sp, #0x8
       mov r5, r0 ; ID
+      mov r8, r1 ; enemy
 
       ldr r0, =0x100
       bl liballoc
@@ -677,31 +662,71 @@ cro_get_weapon_data_str:
       ldr r0, [r0, r5, lsl #2]
       mov r5, r0 ; character
       bl strlen
-      add r0, r0, #17
+      cmp r8, #0x0
+      addeq r0, r0, #17
+      addne r0, r0, #23
+      ldreq r1, =chr_weapon_data_format
+      ldrne r1, =chr_weapon_data_enemy_format
       add r0, r0, r6
       
       str r4, [sp]
       mov r3, r5
       mov r2, r0
-      ldr r1, =chr_weapon_data_format
       mov r0, r7
       bl sprintf
 
       mov r0, r7
       add sp, sp, #0x8
-   pop {r1-r7, pc}
+   pop {r1-r9, pc}
 
 .align 4
 chr_weapon_data_format: .ascii "_ZN3app%uget_weapon_data_%s_%sEv",0
+.align 4
+chr_weapon_data_enemy_format: .ascii "_ZN3app%uget_weapon_data_enemy_%s_%sEv",0
+.align 4
+chr_weapon_specializer_enemy_format: .ascii "_ZN3app%uget_weapon_specializer_enemy_%s_%sEv",0
+
+; r0=ID, r1=name builder
+; Enemy CRO exports add enemy_ before the owner name
+.align 4
+cro_find_weapon_export:
+   push {r4-r8, lr}
+      mov r4, r0
+      mov r5, r1
+      mov r6, #0x0
+
+cro_find_weapon_export_try:
+      mov r0, r4
+      mov r1, r6
+      blx r5
+      mov r7, r0
+
+      add r0, r0, #0x4
+      ldr r1, =cro_load_object
+      ldr r1, [r1]
+      ldr r1, [r1]
+      ldr r1, [r1, #LOAD_OBJECT_LIST]
+      bl cro_list_find_func
+      mov r8, r0
+
+      mov r0, r7
+      bl libdealloc
+
+      cmp r8, #0x0
+      bne cro_find_weapon_export_done
+      cmp r6, #0x0
+      moveq r6, #0x1
+      beq cro_find_weapon_export_try
+
+cro_find_weapon_export_done:
+      mov r0, r8
+   pop {r4-r8, pc}
 
 .pool
 
 WEAPON_SPECIALIZER_SHIFT equ (0x20)
 WEAPON_SPECIALIZER_THIS equ (WEAPON_SPECIALIZER_SHIFT-0x0)
 WEAPON_SPECIALIZER_ID equ (WEAPON_SPECIALIZER_SHIFT-0x4)
-WEAPON_SPECIALIZER_STR equ (WEAPON_SPECIALIZER_SHIFT-0x8)
-WEAPON_SPECIALIZER_CRO equ (WEAPON_SPECIALIZER_SHIFT-0xC)
-WEAPON_SPECIALIZER_FUNC equ (WEAPON_SPECIALIZER_SHIFT-0x10)
 
 WSPEC_TABLE_FIRST equ ((wspec_patch_end - (get_weapon_specializer+0x1C)) / 4)
 
@@ -712,27 +737,14 @@ get_weapon_specializer_redirect:
       sub sp, sp, #WEAPON_SPECIALIZER_SHIFT
       str r0, [sp, #WEAPON_SPECIALIZER_THIS]
       str r1, [sp, #WEAPON_SPECIALIZER_ID]
-   
-      ldr r0, =cro_load_object
-      ldr r0, [r0]
-      ldr r0, [r0]
-      ldr r0, [r0, #LOAD_OBJECT_LIST]
-      str r0, [sp, #WEAPON_SPECIALIZER_CRO]
 
-      ldr r0, [sp, #WEAPON_SPECIALIZER_ID]
-      bl cro_get_weapon_specializer_str
-      str r0, [sp, #WEAPON_SPECIALIZER_STR]
-      
-      add r0, r0, #0x4
-      ldr r1, [sp, #WEAPON_SPECIALIZER_CRO]
-      bl cro_list_find_func
-      str r0, [sp, #WEAPON_SPECIALIZER_FUNC]
-      ldr r0, [sp, #WEAPON_SPECIALIZER_STR]
-      bl libdealloc
-      
+      mov r0, r1
+      ldr r1, =cro_get_weapon_specializer_str
+      bl cro_find_weapon_export
+      mov r3, r0
+
       ldr r0, [sp, #WEAPON_SPECIALIZER_THIS]
       ldr r1, [sp, #WEAPON_SPECIALIZER_ID]
-      ldr r3, [sp, #WEAPON_SPECIALIZER_FUNC]
       
       cmp r3, #0x0
       beq weapon_specializer_default
@@ -788,9 +800,10 @@ loc_98309C:
    pop {r1-r9, pc}
 
 cro_get_weapon_specializer_str:
-   push {r1-r7, lr}
+   push {r1-r9, lr}
       sub sp, sp, #0x8
       mov r5, r0 ; ID
+      mov r8, r1 ; enemy
 
       ldr r0, =0x100
       bl liballoc
@@ -808,24 +821,33 @@ cro_get_weapon_specializer_str:
       ldr r0, [r0, r5, lsl #2]
       mov r5, r0 ; character
       bl strlen
-      add r0, r0, #24
+      cmp r8, #0x0
+      addeq r0, r0, #24
+      addne r0, r0, #30
+      ldreq r1, =chr_weapon_specializer_format
+      ldrne r1, =chr_weapon_specializer_enemy_format
       add r0, r0, r6
       
       str r4, [sp]
       mov r3, r5
       mov r2, r0
-      ldr r1, =chr_weapon_specializer_format
       mov r0, r7
       bl sprintf
 
       mov r0, r7
       add sp, sp, #0x8
-   pop {r1-r7, pc}
+   pop {r1-r9, pc}
 
 .align 4
 chr_weapon_specializer_format: .ascii "_ZN3app%uget_weapon_specializer_%s_%sEv",0
 
 .pool
+wspec_code_end:
+; WSPEC_TABLE_FIRST depends on this address
+.if wspec_code_end > get_weapon_specializer+0x1A0
+   .error "get_weapon_specializer hook runs past its jump-table cutoff"
+.endif
+.fill get_weapon_specializer+0x1A0-wspec_code_end
 wspec_patch_end:
 
 
