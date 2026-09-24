@@ -309,17 +309,30 @@ void printf(char *format, ...)
 #define printf(...) ((void)0)
 #endif
 
-#define SALTYSD_LOG_PATH       "sd:/saltysd/smash/saltysd.log"
-#define SALTYSD_LOG_SIZE       0x400
 #define SALTYSD_OPEN_WRITE     2
 #define SALTYSD_OPEN_CREATE    4
 #define SALTYSD_WRITE_FLUSH    1
-#define SALTYSD_CALIB_LOOPS    1000000
 
 #define SALTYSD_FILE_STREAM    8
 #define SALTYSD_FILE_WRITE     1
 typedef u32 (*file_write_fn)(void *self, u32 *written, u64 offset, const void *buf, u32 size,
                              u32 flags);
+
+static u32 fnv1a(u32 hash, const void *data, u32 size)
+{
+    const u8 *p = data;
+    while (size--) {
+        hash ^= *p++;
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+//Boot log, timings and tree hash: diagnostics only, off in release builds.
+#if SALTYSD_BOOT_LOG
+#define SALTYSD_LOG_PATH       "sd:/saltysd/smash/saltysd.log"
+#define SALTYSD_LOG_SIZE       0x400
+#define BOOT_TICK(name)        u64 name = ticks()
 
 static u64 ticks(void)
 {
@@ -328,15 +341,6 @@ static u64 ticks(void)
     register u32 hi __asm__("r1");
     __asm__ volatile("svc 0x28" : "=r"(lo), "=r"(hi)::"r2", "r3", "r12", "memory");
     return ((u64)hi << 32) | lo;
-}
-
-static u32 calibrate(void)
-{
-    u32 n = SALTYSD_CALIB_LOOPS;
-    u64 start = ticks();
-    //Keep the calibration loop fixed; C optimization would erase the work.
-    __asm__ volatile("1: subs %0, %0, #1\n\tbne 1b" : "+r"(n)::"cc");
-    return (u32)(ticks() - start);
 }
 
 static u32 ticks_to_ms(u64 t)
@@ -382,16 +386,6 @@ static void log_phase(char *log, char *name, u64 t)
     log_str(log, " ticks)\n");
 }
 
-static u32 fnv1a(u32 hash, const void *data, u32 size)
-{
-    const u8 *p = data;
-    while (size--) {
-        hash ^= *p++;
-        hash *= 16777619u;
-    }
-    return hash;
-}
-
 static void write_log(char *log, void *ifile_handle)
 {
     u32 len = strlen(log);
@@ -413,6 +407,29 @@ static void write_log(char *log, void *ifile_handle)
 
     IFile_Close(ifile_handle);
 }
+
+static u32 tree_hash(rf_header *header, void *entries, void *strings, u8 *root_table,
+                     saltysd_named *named, u32 num_named)
+{
+    u32 hash = 2166136261u;
+    u32 tree_sizes[4];
+    tree_sizes[0] = header->resourceentry_amt;
+    tree_sizes[1] = header->entrysection_size;
+    tree_sizes[2] = header->stringsection_size;
+    tree_sizes[3] = header->contents_size;
+    hash = fnv1a(hash, tree_sizes, sizeof(tree_sizes));
+    hash = fnv1a(hash, entries, header->resourceentry_amt * sizeof(rf_entry));
+    hash = fnv1a(hash, strings, header->stringsection_size);
+    hash = fnv1a(hash, root_table, SALTYSD_ID_SPACE);
+    for (u32 i = 0; i < num_named; i++) {
+        hash = fnv1a(hash, named[i].path, strlen(named[i].path) + 1);
+        hash = fnv1a(hash, &named[i].root, sizeof(named[i].root));
+    }
+    return hash;
+}
+#else
+#define BOOT_TICK(name)        ((void)0)
+#endif
 
 typedef struct {
     bool on;
@@ -533,8 +550,10 @@ static u32 file_put(char *path, void *buf, u32 len, void *ifile_handle)
     return written;
 }
 
-static u32 file_get(char *path, void *buf, u32 max, void *ifile_handle)
+//Reads a whole file, up to max, into a buffer sized from the file.
+static u32 file_load(char *path, u8 **out, u32 max, void *ifile_handle)
 {
+    *out = NULL;
     IFile_Init(ifile_handle);
     if (!IFile_Open(ifile_handle, path, 1))
         return 0;
@@ -544,8 +563,8 @@ static u32 file_get(char *path, void *buf, u32 max, void *ifile_handle)
         size = max;
 
     u32 read = 0;
-    if (size)
-        IFile_Read(ifile_handle, buf, size, &read);
+    if (size && (*out = malloc(size)))
+        IFile_Read(ifile_handle, *out, size, &read);
 
     IFile_Close(ifile_handle);
     return read;
@@ -1113,8 +1132,7 @@ static bool idx_apply(idx_header *h, idx_tree *t, saltysd_root *roots, u32 num_r
 
 void _main(rf_header *header, void *contents)
 {
-    u64 t_start = ticks();
-    u32 calib_ticks = calibrate();
+    BOOT_TICK(t_start);
     u32 entries_before = header->resourceentry_amt;
     u32 entrysection_before = header->entrysection_size;
 
@@ -1250,7 +1268,7 @@ void _main(rf_header *header, void *contents)
         free(mod_root);
         free(mod_entries);
     }
-    u64 t_roots = ticks();
+    BOOT_TICK(t_roots);
 
     //One byte of root per resource id. Indexed by id rather than ordinal, so it
     //has to be shifted alongside the entries whenever a new one is inserted.
@@ -1266,14 +1284,11 @@ void _main(rf_header *header, void *contents)
     idx_path(index_path, &key);
 
     if (root_table) {
-        idx_header probe;
-        u32 got = file_get(index_path, &probe, sizeof(probe), ifile_handle);
+        u8 *index = NULL;
+        u32 size = file_load(index_path, &index, SALTYSD_INDEX_MAX, ifile_handle);
 
-        if (got == sizeof(probe) && probe.magic == SALTYSD_INDEX_MAGIC &&
-            probe.total_size >= sizeof(probe) && probe.total_size <= SALTYSD_INDEX_MAX) {
-            u8 *index = malloc(probe.total_size);
-            u32 size = index ? file_get(index_path, index, probe.total_size, ifile_handle) : 0;
-
+        if (index && size >= sizeof(idx_header) &&
+            ((idx_header *)index)->total_size >= sizeof(idx_header)) {
             idx_tree tree;
             tree.header = header;
             tree.entries = (rf_entry *)entries;
@@ -1285,29 +1300,19 @@ void _main(rf_header *header, void *contents)
             saltysd_named *named = NULL;
             u32 num_named = 0;
 
-            if (size == probe.total_size && idx_usable((idx_header *)index, size, &key, &tree) &&
+            if (idx_usable((idx_header *)index, size, &key, &tree) &&
                 idx_apply((idx_header *)index, &tree, roots, num_roots, &named, &num_named)) {
+#if SALTYSD_BOOT_LOG
                 u32 applied_entries = ((idx_header *)index)->num_inserts;
                 u32 applied_files = ((idx_header *)index)->num_overrides;
+#endif
                 free(index);
 
-                u64 t_applied = ticks();
-
-                u32 hash = 2166136261u;
-                u32 tree_sizes[4];
-                tree_sizes[0] = header->resourceentry_amt;
-                tree_sizes[1] = header->entrysection_size;
-                tree_sizes[2] = header->stringsection_size;
-                tree_sizes[3] = header->contents_size;
-                hash = fnv1a(hash, tree_sizes, sizeof(tree_sizes));
-                hash = fnv1a(hash, entries, header->resourceentry_amt * sizeof(rf_entry));
-                hash = fnv1a(hash, string_section_next, header->stringsection_size);
-                hash = fnv1a(hash, root_table, SALTYSD_ID_SPACE);
-                for (u32 i = 0; i < num_named; i++) {
-                    hash = fnv1a(hash, named[i].path, strlen(named[i].path) + 1);
-                    hash = fnv1a(hash, &named[i].root, sizeof(named[i].root));
-                }
-                u64 t_hash = ticks();
+#if SALTYSD_BOOT_LOG
+                BOOT_TICK(t_applied);
+                u32 hash = tree_hash(header, entries, string_section_next, root_table, named,
+                                     num_named);
+                BOOT_TICK(t_hash);
 
                 char *log = malloc(SALTYSD_LOG_SIZE);
                 if (log) {
@@ -1324,11 +1329,7 @@ void _main(rf_header *header, void *contents)
                     log_dec(log, applied_entries);
                     log_str(log, " overrides ");
                     log_dec(log, applied_files);
-                    log_str(log, "\ncalib ");
-                    log_dec(log, calib_ticks);
-                    log_str(log, " loops ");
-                    log_dec(log, SALTYSD_CALIB_LOOPS);
-                    log_str(log, " ticks\n");
+                    log_str(log, "\n");
                     log_phase(log, "roots ", t_roots - t_start);
                     log_phase(log, "index ", t_applied - t_roots);
                     log_phase(log, "total ", t_applied - t_start);
@@ -1339,6 +1340,7 @@ void _main(rf_header *header, void *contents)
                     write_log(log, ifile_handle);
                     free(log);
                 }
+#endif
 
                 saltysd_map *map = malloc(sizeof(saltysd_map));
                 map->magic = SALTYSD_MAGIC;
@@ -1355,9 +1357,9 @@ void _main(rf_header *header, void *contents)
                 unmount_path("sd");
                 return;
             }
-
-            free(index);
         }
+
+        free(index);
     }
 
     u32 num_directories = num_roots;
@@ -1504,7 +1506,7 @@ void _main(rf_header *header, void *contents)
 
     free(dirs);
     free(dir_entries);
-    u64 t_walk = ticks();
+    BOOT_TICK(t_walk);
 
     if (dirs_skipped)
         printf("SaltySD %x folders left unscanned: no room in the scan", dirs_skipped);
@@ -1593,7 +1595,7 @@ void _main(rf_header *header, void *contents)
         files[i] = NULL;
     }
     num_named = named_count;
-    u64 t_prep = ticks();
+    BOOT_TICK(t_prep);
 
     u32 num_sorted = 0;
     for (int i = 0; i < num_files; i++) {
@@ -1654,7 +1656,7 @@ void _main(rf_header *header, void *contents)
         g = end;
     }
     free(sorted_order);
-    u64 t_sort = ticks();
+    BOOT_TICK(t_sort);
 
     idx_rec rec;
     rec.num_revokes = rec.num_overrides = rec.num_strings = 0;
@@ -1749,7 +1751,7 @@ void _main(rf_header *header, void *contents)
             }
         }
     }
-    u64 t_match = ticks();
+    BOOT_TICK(t_match);
 
     for (u32 k = 0; k < num_keys; k++) {
         if (files[file_slots[k]] == NULL)
@@ -2026,33 +2028,27 @@ void _main(rf_header *header, void *contents)
 
     if (entries_skipped)
         printf("SaltySD %x new files dropped: the insertion reserve is full", entries_skipped);
-    u64 t_insert = ticks();
+    BOOT_TICK(t_insert);
 
-    u32 hash = 2166136261u;
-    u32 tree_sizes[4];
-    tree_sizes[0] = header->resourceentry_amt;
-    tree_sizes[1] = header->entrysection_size;
-    tree_sizes[2] = header->stringsection_size;
-    tree_sizes[3] = header->contents_size;
-    hash = fnv1a(hash, tree_sizes, sizeof(tree_sizes));
-    hash = fnv1a(hash, entries, header->resourceentry_amt * sizeof(rf_entry));
-    hash = fnv1a(hash, string_section_next, header->stringsection_size);
-    hash = fnv1a(hash, root_table, SALTYSD_ID_SPACE);
-    for (u32 i = 0; i < num_named; i++) {
-        hash = fnv1a(hash, named[i].path, strlen(named[i].path) + 1);
-        hash = fnv1a(hash, &named[i].root, sizeof(named[i].root));
-    }
-    u64 t_hash = ticks();
+#if SALTYSD_BOOT_LOG
+    u32 hash = tree_hash(header, entries, string_section_next, root_table, named, num_named);
+    BOOT_TICK(t_hash);
 
-    u32 put = idx_write(&rec, &key, index_path, roots, num_roots, named, num_named, ifile_handle);
+    u32 put =
+#endif
+        idx_write(&rec, &key, index_path, roots, num_roots, named, num_named, ifile_handle);
+#if SALTYSD_BOOT_LOG
     bool indexed = rec.on;
+#endif
     free(rec.revokes);
     free(rec.overrides);
     free(rec.strings);
     free(rec.exts);
     free(rec.inserts);
     free(rec.text);
-    u64 t_index = ticks();
+
+#if SALTYSD_BOOT_LOG
+    BOOT_TICK(t_index);
 
     char *log = malloc(SALTYSD_LOG_SIZE);
     log[0] = 0;
@@ -2072,11 +2068,7 @@ void _main(rf_header *header, void *contents)
     log_dec(log, entries_added);
     log_str(log, " dropped ");
     log_dec(log, entries_skipped);
-    log_str(log, "\ncalib ");
-    log_dec(log, SALTYSD_CALIB_LOOPS);
-    log_str(log, " loops ");
-    log_dec(log, calib_ticks);
-    log_str(log, " ticks\n");
+    log_str(log, "\n");
     log_phase(log, "roots ", t_roots - t_start);
     log_phase(log, "walk  ", t_walk - t_roots);
     log_phase(log, "prep  ", t_prep - t_walk);
@@ -2104,6 +2096,7 @@ void _main(rf_header *header, void *contents)
     log_str(log, "\n");
     write_log(log, ifile_handle);
     free(log);
+#endif
 
     free(full_name);
     free(files);

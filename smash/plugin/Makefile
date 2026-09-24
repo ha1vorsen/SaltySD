@@ -30,6 +30,9 @@ CFLAGS  := $(ARCH) -std=gnu11 -O2 -Wall -fomit-frame-pointer -ffunction-sections
            -Isource/monocypher
 ASFLAGS := $(ARCH) -x assembler-with-cpp -I../build -Wa,-I,.. -Wa,-I,../build
 CFLAGS  += -DSALTYSD_TITLE_ID=0x$(firstword $(TITLE_IDS))
+# 1 writes sd:/saltysd/smash/saltysd.log with boot timings and a tree hash.
+SALTYSD_BOOT_LOG ?= 0
+CFLAGS  += -DSALTYSD_BOOT_LOG=$(SALTYSD_BOOT_LOG)
 ifeq ($(UPDATE_TEST),1)
 CFLAGS  += -DSALTYSD_UPDATE_TEST
 TARGET  := saltysd-TEST
@@ -107,6 +110,12 @@ endif
 	@echo '#define SALTYSD_BUILT_AT "$(BUILT_AT)"' >> $@
 
 $(BUILD)/host_menu.o $(BUILD)/update.o: $(BUILD)/buildinfo.h
+
+# Touched only when SALTYSD_BOOT_LOG changes, so flipping it rebuilds resource_mod.
+$(BUILD)/bootlog.flag: FORCE | $(BUILD)
+	@echo '$(SALTYSD_BOOT_LOG)' | cmp -s - $@ || echo '$(SALTYSD_BOOT_LOG)' > $@
+
+$(BUILD)/resource_mod.o: $(BUILD)/bootlog.flag
 
 $(BUILD)/%.o: $(SOURCES)/%.s
 	@echo "as  $<"
