@@ -22,6 +22,7 @@ TITLE_IDS ?= 000EDF00
 
 CODEBIN  ?= $(CURDIR)/../code.bin
 PATCHED  ?= $(CURDIR)/../build/code_saltysd.bin
+LEGACY   ?= $(firstword $(TITLE_IDS)) "$(CODEBIN)"
 
 ARCH    := -marm -march=armv6k -mtune=mpcore -mfloat-abi=hard
 # -O2 is what resource_mod has always been built with.
@@ -97,7 +98,10 @@ $(BUILD)/patches.h: $(CODEBIN) $(PATCHED) ../tools/gen_patches.py | $(BUILD)
 
 $(OFILES): | patches $(BUILD)
 
-$(BUILD)/main.o: $(BUILD)/patches.h
+$(BUILD)/legacy.h: $(CODEBIN) ../tools/gen_legacy.py $(wildcard ../legacy/*.ips) | $(BUILD)
+	@python ../tools/gen_legacy.py ../legacy $@ $(LEGACY)
+
+$(BUILD)/main.o: $(BUILD)/patches.h $(BUILD)/legacy.h
 
 $(BUILD)/buildinfo.h: FORCE | $(BUILD)
 ifneq ($(VERSION),)

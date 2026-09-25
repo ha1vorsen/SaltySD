@@ -1,6 +1,7 @@
 *.bin
 */*.bin
 *.ips
+!/smash/legacy/*.ips
 
 # build artifacts
 *.o

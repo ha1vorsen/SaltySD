@@ -27,6 +27,7 @@ typedef struct {
     unsigned int install_stage;
     int install_result;
     unsigned int gate_expired;
+    unsigned int legacy;
 } saltysd_status_t;
 
 extern volatile saltysd_status_t saltysd_status;
