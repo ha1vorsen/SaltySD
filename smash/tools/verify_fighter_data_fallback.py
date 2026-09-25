@@ -44,6 +44,19 @@ def verify_dispatch(pristine, patched, start, cases, default, fallback, lookup, 
     if early & 0xFF000000 != 0x2A000000 or branch_target(start + 4, early) != default:
         raise ValueError("out-of-domain fighter IDs do not tail into the stock default")
 
+    if read_word(patched, start + 8, base) != 0xE92D43FE:
+        raise ValueError("fighter-data entry no longer saves r1-r9 and lr")
+    reserve = read_word(patched, start + 0xC, base)
+    if reserve & 0xFFFFFF00 != 0xE24DD000:
+        raise ValueError("fighter-data entry no longer reserves its locals")
+    frame = reserve & 0xFF
+    for index in range(3):
+        spill = read_word(patched, start + 0x10 + index * 4, base)
+        if spill & 0xFFFF0000 != 0xE58D0000 or (spill >> 12) & 0xF != index:
+            raise ValueError(f"fighter-data entry no longer spills r{index}")
+        if spill & 0xFFF >= frame:
+            raise ValueError(f"fighter-data r{index} spill overwrites the saved registers")
+
     if read_word(patched, lookup, base) != 0xE3530000:
         raise ValueError("fighter-data export-result check changed")
     miss = read_word(patched, lookup + 4, base)

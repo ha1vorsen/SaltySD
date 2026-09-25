@@ -1031,6 +1031,26 @@ static bool idx_usable(idx_header *h, u32 size, idx_header *key, idx_tree *t)
     return true;
 }
 
+static u32 idx_string_end(idx_header *h)
+{
+    u8 *base = (u8 *)h;
+    char *text = (char *)base + h->text_off;
+    u32 end = 0;
+
+    idx_string *st = (idx_string *)(base + h->strings_off);
+    for (u32 i = 0; i < h->num_strings; i++) {
+        u32 at = st[i].tree_offset + strlen(text + st[i].text) + 1;
+        if (at > end)
+            end = at;
+    }
+
+    idx_ext *ex = (idx_ext *)(base + h->exts_off);
+    for (u32 i = 0; i < h->num_exts; i++)
+        if (ex[i].tree_offset + 1 > end)
+            end = ex[i].tree_offset + 1;
+    return end;
+}
+
 static bool idx_apply(idx_header *h, idx_tree *t, saltysd_root *roots, u32 num_roots,
                       saltysd_named **out_named, u32 *out_num_named)
 {
@@ -1130,6 +1150,24 @@ static bool idx_apply(idx_header *h, idx_tree *t, saltysd_root *roots, u32 num_r
     return true;
 }
 
+static void trim_string_blocks(rf_header *header, void *strings, u32 stock_blocks, u32 used_end)
+{
+    u32 *count = strings;
+    u32 need = (used_end + SALTYSD_STRING_BLOCK_MASK) / SALTYSD_STRING_BLOCK_SIZE;
+    if (need < stock_blocks)
+        need = stock_blocks;
+    if (need >= *count)
+        return;
+
+    u32 shrink = (*count - need) * SALTYSD_STRING_BLOCK_SIZE;
+    memmove(strings + sizeof(u32) + need * SALTYSD_STRING_BLOCK_SIZE,
+            strings + sizeof(u32) + *count * SALTYSD_STRING_BLOCK_SIZE, SALTYSD_STRING_BLOCK_SIZE);
+    *count = need;
+    header->stringsection_size -= shrink;
+    header->decompressed_size -= shrink;
+    header->contents_size -= shrink;
+}
+
 void _main(rf_header *header, void *contents)
 {
     BOOT_TICK(t_start);
@@ -1162,6 +1200,7 @@ void _main(rf_header *header, void *contents)
     header->stringsection_size += EXT_SHIFT;
     header->decompressed_size += EXT_SHIFT;
     header->contents_size += EXT_SHIFT;
+    u32 stock_blocks = *(u32 *)string_section_next;
     *(u32 *)string_section_next += (EXT_SHIFT / SALTYSD_STRING_BLOCK_SIZE);
 
     rf_entry(*entries)[] = contents + header->entrysection_start - header->contents_start;
@@ -1306,6 +1345,8 @@ void _main(rf_header *header, void *contents)
                 u32 applied_entries = ((idx_header *)index)->num_inserts;
                 u32 applied_files = ((idx_header *)index)->num_overrides;
 #endif
+                trim_string_blocks(header, string_section_next, stock_blocks,
+                                   idx_string_end((idx_header *)index));
                 free(index);
 
 #if SALTYSD_BOOT_LOG
@@ -2028,6 +2069,7 @@ void _main(rf_header *header, void *contents)
 
     if (entries_skipped)
         printf("SaltySD %x new files dropped: the insertion reserve is full", entries_skipped);
+    trim_string_blocks(header, string_section_next, stock_blocks, last_str_addr);
     BOOT_TICK(t_insert);
 
 #if SALTYSD_BOOT_LOG
