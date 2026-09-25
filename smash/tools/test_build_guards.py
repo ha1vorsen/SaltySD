@@ -93,6 +93,9 @@ class FighterDataFallbackTests(unittest.TestCase):
         struct.pack_into("<II", patched, self.START - self.BASE,
                          0xE3510041,
                          self.branch(self.START + 4, self.DEFAULT, 0x2))
+        struct.pack_into("<5I", patched, self.START - self.BASE + 8,
+                         0xE92D43FE, 0xE24DD020,
+                         0xE58D001C, 0xE58D1018, 0xE58D2014)
         struct.pack_into("<II", patched, self.LOOKUP - self.BASE,
                          0xE3530000,
                          self.branch(self.LOOKUP + 4, self.FALLBACK, 0x0))
@@ -118,6 +121,12 @@ class FighterDataFallbackTests(unittest.TestCase):
         pristine, patched = self.images()
         struct.pack_into("<I", patched, self.START - self.BASE + 0xE0, 0x01234567)
         with self.assertRaisesRegex(ValueError, "deliberate"):
+            self.verify((pristine, patched))
+
+    def test_local_over_saved_r1_fails(self):
+        pristine, patched = self.images()
+        struct.pack_into("<I", patched, self.START - self.BASE + 0x10, 0xE58D0020)
+        with self.assertRaisesRegex(ValueError, "saved registers"):
             self.verify((pristine, patched))
 
     def test_modified_stock_case_stub_fails(self):

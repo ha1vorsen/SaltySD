@@ -8,6 +8,8 @@ BASE = 0x100000
 
 # Start, end, require balanced stack
 ROUTINES = (
+    ("cro_find_func", "cro_list_find_func", True),
+    ("cro_list_find_func", "cro_get_new_str", True),
     ("get_proj_new", "get_chr_new", True),
     ("get_chr_new", "cro_get_size_str", True),
     ("get_proj_size", "get_chr_size", True),
