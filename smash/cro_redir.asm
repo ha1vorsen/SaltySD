@@ -11,7 +11,9 @@ CRO_FAILURE_ALLOC equ (0x80000002)
 CRO_FAILURE_LOAD equ (0x80000100)
 
 LOAD_OBJECT_LIST equ (0x8)
+LOAD_OBJECT_LOCK equ (0xC)
 BUFFER_LOAD_ADDR equ (0x0)
+BUFFER_STATUS equ (0x8)
 BUFFER_PPREV equ (0x18)
 BUFFER_PNEXT equ (0x1C)
 BUFFER_CRO_NAME equ (0x20)
@@ -96,10 +98,9 @@ cro_sarc_skip:
       movgt r0, #0x0 ; only fighters and weapons have CRO objects
       bgt failed
    
-      ldr r0, =cro_load_object
-      ldr r0, [r0]
-      ldr r0, [r0]
-      ldr r5, [r0, #LOAD_OBJECT_LIST]
+      ldr r5, =cro_load_object
+      ldr r5, [r5]
+      ldr r5, [r5]
 
       ldr r0, [r4, #0x2B4] ; get ID
       ldrb r1, [r4, #0x2B0] ; get type
@@ -174,41 +175,39 @@ cro_find_func:
       
       ldr r6, [r4, #CRO_NAMED_EXPORT_PTR]
       ldr r7, [r4, #CRO_NAMED_EXPORT_NUM]
-      cmp r7, #0x0
-      moveq r0, #0x0
-      beq symbol_success
 
 symbol_loop:
-      ldr r0, [r6, #0x0]
+      subs r7, r7, #0x1
+      movcc r0, #0x0
+      bcc symbol_success
+
+      ldr r0, [r6], #0x8
       mov r1, r5
       bl strcmp
       cmp r0, #0x0
-      ldreq r0, [r6, #0x4]
-      lsreq r0, r0, #0x4
-      ldreq r1, [r4, #CRO_CODE_START]
-      addeq r0, r0, r1
-      beq symbol_success
-      
-      add r6, r6, #0x8
-      sub r7, r7, #0x1
-      cmp r7, #0x0
       bne symbol_loop
-      
-      mov r0, #0x0
+
+      ldr r0, [r6, #-0x4]
+      lsr r0, r0, #0x4
+      ldr r1, [r4, #CRO_CODE_START]
+      add r0, r0, r1
 symbol_success:
    pop {r1-r7, pc}
 
-; r0=string, r1=message_buffer
+; r0=string, r1=CRO load object
 cro_list_find_func:
    push {r1-r7, lr}
-      mov r5, r1
       mov r6, r0
+      add r7, r1, #LOAD_OBJECT_LOCK
+      mov r0, r7
+      bl crit_enter
+      ldr r5, [r7, #LOAD_OBJECT_LIST-LOAD_OBJECT_LOCK]
 
+cro_search_loop:
       mov r0, #0x0
       cmp r5, #0x0
       beq cro_found
 
-cro_search_loop:
 .if SALTYSD_DEBUG
       push {r0-r1}
          add r0, r5, #BUFFER_CRO_NAME
@@ -218,22 +217,22 @@ cro_search_loop:
 
       ; A node whose CRO is not loaded has no export table, so the answer for
       ; it is "not here" rather than a read off address zero.
-      mov r0, #0x0
-      ldr r1, [r5, #BUFFER_LOAD_ADDR]
+      ldr r1, [r5, #BUFFER_STATUS]
+      tst r1, #0x80000000
+      ldreq r1, [r5, #BUFFER_LOAD_ADDR]
+      movne r1, #0x0
       cmp r1, #0x0
-      beq cro_search_next
-
-      mov r0, r6
-      bl cro_find_func
+      movne r0, r6
+      blne cro_find_func
       cmp r0, #0x0
-      bne cro_found
-
-cro_search_next:
-      ldr r5, [r5, #BUFFER_PNEXT]
-      cmp r5, #0x0
-      bne cro_search_loop
+      ldreq r5, [r5, #BUFFER_PNEXT]
+      beq cro_search_loop
 
 cro_found:
+      mov r4, r0
+      mov r0, r7
+      bl crit_leave
+      mov r0, r4
    pop {r1-r7, pc}
 
 cro_get_new_str:
@@ -390,14 +389,18 @@ proj_new_format: .ascii "_Z%uNew%s_%sPv",0
 proj_size_format: .ascii "_Z%uGetSize%s_%sv",0
 
 .pool
+cro_fighter_new_end:
+.if cro_fighter_new_end > saltysd_island
+   .error "cro_fighter_new patch runs into the SaltySD island"
+.endif
 
 FIGHTER_DATA_SHIFT equ (0x20)
-FIGHTER_DATA_OUT equ (FIGHTER_DATA_SHIFT-0x0)
-FIGHTER_DATA_ID equ (FIGHTER_DATA_SHIFT-0x4)
-FIGHTER_DATA_UNK equ (FIGHTER_DATA_SHIFT-0x8)
-FIGHTER_DATA_STR equ (FIGHTER_DATA_SHIFT-0xC)
-FIGHTER_DATA_CRO equ (FIGHTER_DATA_SHIFT-0x10)
-FIGHTER_DATA_FUNC equ (FIGHTER_DATA_SHIFT-0x14)
+FIGHTER_DATA_OUT equ (FIGHTER_DATA_SHIFT-0x4)
+FIGHTER_DATA_ID equ (FIGHTER_DATA_SHIFT-0x8)
+FIGHTER_DATA_UNK equ (FIGHTER_DATA_SHIFT-0xC)
+FIGHTER_DATA_STR equ (FIGHTER_DATA_SHIFT-0x10)
+FIGHTER_DATA_CRO equ (FIGHTER_DATA_SHIFT-0x14)
+FIGHTER_DATA_FUNC equ (FIGHTER_DATA_SHIFT-0x18)
 
 ; Load get_fighter_data_* exports from CROs at runtime
 .org get_fighter_data
@@ -414,7 +417,6 @@ get_fighter_data_redirect:
       ldr r0, =cro_load_object
       ldr r0, [r0]
       ldr r0, [r0]
-      ldr r0, [r0, #LOAD_OBJECT_LIST]
       str r0, [sp, #FIGHTER_DATA_CRO]
 
       ldr r0, [sp, #FIGHTER_DATA_ID]
@@ -497,7 +499,6 @@ get_fighter_specializer_redirect:
       ldr r0, =cro_load_object
       ldr r0, [r0]
       ldr r0, [r0]
-      ldr r0, [r0, #LOAD_OBJECT_LIST]
       str r0, [sp, #FIGHTER_SPECIALIZER_CRO]
 
       ldr r0, [sp, #FIGHTER_SPECIALIZER_ID]
@@ -705,7 +706,6 @@ cro_find_weapon_export_try:
       ldr r1, =cro_load_object
       ldr r1, [r1]
       ldr r1, [r1]
-      ldr r1, [r1, #LOAD_OBJECT_LIST]
       bl cro_list_find_func
       mov r8, r0
 
