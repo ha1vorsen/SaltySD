@@ -64,7 +64,8 @@ def main():
         for n, (i, j) in enumerate(found):
             w(f"static const u8 p{n}_want[] = {{ {carray(patched[i:j])} }};\n")
             w(f"static const u8 p{n}_orig[] = {{ {carray(pristine[i:j])} }};\n")
-        w("\nstatic const SaltyPatch saltysd_patches[] = {\n")
+        w(f"\n#define SALTYSD_CODE_END 0x{len(pristine) + BASE:08X}\n")
+        w("\nstatic const SaltPatch saltysd_patches[] = {\n")
         for n, (i, j) in enumerate(found):
             w(f"    {{ 0x{i + BASE:08X}, {j - i}, p{n}_want, p{n}_orig }},\n")
         w("};\n")
