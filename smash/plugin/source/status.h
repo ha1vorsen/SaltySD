@@ -28,6 +28,10 @@ typedef struct {
     int install_result;
     unsigned int gate_expired;
     unsigned int legacy;
+    unsigned int plugins_listed;
+    unsigned int plugins_applied;
+    unsigned int plugins_refused;
+    int plugins_result;
 } saltysd_status_t;
 
 extern volatile saltysd_status_t saltysd_status;
