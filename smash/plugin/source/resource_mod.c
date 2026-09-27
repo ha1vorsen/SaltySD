@@ -237,6 +237,21 @@ bool starts_with(char *str, char *prefix)
     return true;
 }
 
+static u16 lower(u16 c)
+{
+    if (c >= 'A' && c <= 'Z')
+        return c + ('a' - 'A');
+    return c;
+}
+
+static bool is_plugins_dir(const u16 *name)
+{
+    for (const char *want = "plugins"; *want; name++, want++)
+        if (lower(*name) != *want)
+            return false;
+    return !*name;
+}
+
 u32 len_to(char *str, char chr)
 {
     u32 count = 0;
@@ -1439,6 +1454,9 @@ void _main(rf_header *header, void *contents)
                     copy_entry_path(entry_path, dir_entry);
 
                     if (dir_entry->is_directory) {
+                        if (i == 0 && is_plugins_dir(entry_path))
+                            continue;
+
                         //Checked before anything is allocated: the queue array
                         //and the path buffer are both fixed, so a subtree that
                         //will not fit is left unscanned and counted.

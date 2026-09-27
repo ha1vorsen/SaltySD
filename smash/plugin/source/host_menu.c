@@ -4,6 +4,7 @@
 #include "display.h"
 #include "fs.h"
 #include "mods.h"
+#include "plugins.h"
 #include "update.h"
 #include "version.h"
 #include "input.h"
@@ -36,17 +37,34 @@
 #define MOD_NAME_SHOWN       40
 
 enum { EXIT_NONE, EXIT_BACK, EXIT_HOME, EXIT_SLEEP, EXIT_CLOSE };
-enum { ITEM_MODS, ITEM_REBUILD, ITEM_STABLE, ITEM_DIRTY, ITEM_BACK, ITEM_COUNT };
+enum { ITEM_MODS, ITEM_PLUGINS, ITEM_REBUILD, ITEM_STABLE, ITEM_DIRTY, ITEM_BACK, ITEM_COUNT };
 enum { VIEW_MAIN, VIEW_MODS, VIEW_CONFIRM, VIEW_BUSY, VIEW_CODE, VIEW_OFFER,
        VIEW_INSTALL_CONFIRM, VIEW_REBUILD, VIEW_COUNT };
 
 static const char *const item_names[ITEM_COUNT] = {
-    "Mods", "Rebuild mod index", "Check for updates (stable)",
+    "Mods", "Plugins", "Rebuild mod index", "Check for updates (stable)",
     "Check for updates (dirty)", "Back",
 };
 
 typedef struct {
+    const char *title;
+    const char *empty;
+    const char *reading;
+    toggle_list *list;
+    int is_mods;
+} list_page;
+
+static const list_page mods_page = {
+    "Mods", "No mod folders in /saltysd/smash", "Reading /saltysd/smash", &mods, 1,
+};
+static const list_page plugins_page = {
+    "Plugins", "No plugin folders in /luma/titles/smash/plugins",
+    "Reading /luma/titles/smash/plugins", &plugins, 0,
+};
+
+typedef struct {
     display output;
+    const list_page *page;
     u32 view;
     u32 cursor;
     u32 mod_cursor;
@@ -156,29 +174,33 @@ static void paint_main(u8 *fb, const screen *s, const menu *m)
 
 static void paint_mods(u8 *fb, const screen *s, const menu *m)
 {
+    const toggle_list *list = m->page->list;
     char line[TEXT_LINE_CAPACITY];
     text_buffer line_text = { line, 0 };
-    put_str(&line_text, "Mods ");
-    if (mods_count > MOD_ROWS) {
+    put_str(&line_text, m->page->title);
+    put_str(&line_text, " ");
+    if (list->count > MOD_ROWS) {
         u32 last = m->mod_first + MOD_ROWS;
+        if (last > list->count)
+            last = list->count;
         put_dec(&line_text, m->mod_first + 1);
         put_str(&line_text, "-");
-        put_dec(&line_text, last > mods_count ? mods_count : last);
+        put_dec(&line_text, last);
         put_str(&line_text, " of ");
-        put_dec(&line_text, mods_count);
+        put_dec(&line_text, list->count);
     } else {
         put_str(&line_text, "(");
-        put_dec(&line_text, mods_count);
+        put_dec(&line_text, list->count);
         put_str(&line_text, ")");
     }
     draw_text(fb, s, 8, 8, line, TITLE_RGB);
 
-    if (!mods_count)
-        draw_text(fb, s, 8, MOD_ROW_Y, "No mod folders in /saltysd/smash", DIM_RGB);
+    if (!list->count)
+        draw_text(fb, s, 8, MOD_ROW_Y, m->page->empty, DIM_RGB);
 
-    for (u32 row = 0; row < MOD_ROWS && m->mod_first + row < mods_count; row++) {
+    for (u32 row = 0; row < MOD_ROWS && m->mod_first + row < list->count; row++) {
         u32 i = m->mod_first + row;
-        const mod_entry *mod = &mods[i];
+        const toggle_entry *mod = &list->entries[i];
         int on = i == m->mod_cursor;
         u32 y = MOD_ROW_Y + row * MOD_ROW_H;
         u32 rgb = on ? CURSOR_RGB : mod->wanted ? TEXT_RGB : DIM_RGB;
@@ -228,10 +250,9 @@ static void hint_mods(u8 *fb, const screen *s, const menu *m)
     char line[TEXT_LINE_CAPACITY];
     text_buffer line_text = { line, 0 };
 
-    (void)m;
     draw_text(fb, s, 8, 8, "Up/Down: Move  A: On/Off", DIM_RGB);
     draw_text(fb, s, 8, 20, "START: Apply  B: Back/Discard", DIM_RGB);
-    put_dec(&line_text, mods_changes());
+    put_dec(&line_text, toggles_changes(m->page->list));
     put_str(&line_text, " Change(s) not applied");
     draw_text(fb, s, 8, 44, line, TEXT_RGB);
 }
@@ -241,9 +262,8 @@ static void hint_confirm(u8 *fb, const screen *s, const menu *m)
     char line[TEXT_LINE_CAPACITY];
     text_buffer line_text = { line, 0 };
 
-    (void)m;
     put_str(&line_text, "Write ");
-    put_dec(&line_text, mods_changes());
+    put_dec(&line_text, toggles_changes(m->page->list));
     put_str(&line_text, " change(s) and restart?");
     draw_text(fb, s, 8, 8, line, TEXT_RGB);
     draw_text(fb, s, 8, 20, "A: Yes  B: No", CURSOR_RGB);
@@ -302,35 +322,45 @@ static void fs_failed(menu *m, const char *what, int res)
     set_status(m, status_buf, 0);
 }
 
-static void open_mods(menu *m)
+static void open_list(menu *m, const list_page *page)
 {
     int res = fs_open();
     if (res < 0) {
         fs_failed(m, "SD access", res);
         return;
     }
-    res = mods_load();
+    res = toggles_load(page->list);
     if (res < 0) {
         fs_close();
-        fs_failed(m, "Reading /saltysd/smash", res);
+        fs_failed(m, page->reading, res);
         return;
     }
+    if (page->is_mods)
+        saltysd_status.mods_listed = page->list->count;
 
+    m->page = page;
     m->view = VIEW_MODS;
     m->mod_cursor = m->mod_first = 0;
     set_status(m, 0, 0);
-    if (mods_skipped) {
+    if (page->list->skipped) {
         text_buffer line_text = { status_buf, 0 };
-        put_dec(&line_text, mods_skipped);
-        put_str(&line_text, " folder(s) not shown: name too long or over 62");
+        put_dec(&line_text, page->list->skipped);
+        put_str(&line_text, " folder(s) not shown: name too long or over ");
+        put_dec(&line_text, page->list->max);
         set_status(m, status_buf, 0);
     }
 }
 
 static void apply_mods(menu *m)
 {
-    mods_apply_result r;
-    mods_apply(&r);
+    toggles_apply_result r;
+    toggles_apply(m->page->list, &r);
+    if (r.failed)
+        saltysd_status.last_fs_result = r.first_error;
+    else if (r.applied)
+        saltysd_status.last_fs_result = 0;
+    if (m->page->is_mods)
+        saltysd_status.mods_changed += r.applied;
 
     text_buffer line_text = { status_buf, 0 };
     put_str(&line_text, "Applied ");
@@ -346,9 +376,11 @@ static void apply_mods(menu *m)
         m->status2 = status2_buf;
     }
     if (r.applied) {
-        int res = mods_drop_index();
-        if (res < 0)
-            saltysd_status.last_fs_result = res;
+        if (m->page->is_mods) {
+            int res = mods_drop_index();
+            if (res < 0)
+                saltysd_status.last_fs_result = res;
+        }
         restart(m);
     }
 }
@@ -517,12 +549,18 @@ static void run_gate(menu *m)
 
 static void move_mod_cursor(menu *m, int down)
 {
-    if (!mods_count)
+    u32 count = m->page->list->count;
+    if (!count)
         return;
-    if (down)
-        m->mod_cursor = m->mod_cursor + 1 == mods_count ? 0 : m->mod_cursor + 1;
-    else
-        m->mod_cursor = m->mod_cursor ? m->mod_cursor - 1 : mods_count - 1;
+    if (down) {
+        m->mod_cursor++;
+        if (m->mod_cursor == count)
+            m->mod_cursor = 0;
+    } else {
+        if (m->mod_cursor == 0)
+            m->mod_cursor = count;
+        m->mod_cursor--;
+    }
 
     if (m->mod_cursor < m->mod_first)
         m->mod_first = m->mod_cursor;
@@ -543,7 +581,10 @@ static u32 press_main(menu *m, u32 pressed)
 
     switch (m->cursor) {
     case ITEM_MODS:
-        open_mods(m);
+        open_list(m, &mods_page);
+        return EXIT_NONE;
+    case ITEM_PLUGINS:
+        open_list(m, &plugins_page);
         return EXIT_NONE;
     case ITEM_REBUILD:
         m->view = VIEW_REBUILD;
@@ -575,12 +616,12 @@ static u32 press_mods(menu *m, u32 pressed)
         move_mod_cursor(m, 0);
     if (pressed & KEY_DOWN)
         move_mod_cursor(m, 1);
-    if ((pressed & KEY_A) && mods_count) {
-        mods[m->mod_cursor].wanted ^= 1;
+    if ((pressed & KEY_A) && m->page->list->count) {
+        m->page->list->entries[m->mod_cursor].wanted ^= 1;
         set_status(m, 0, 0);
     }
     if (pressed & KEY_START) {
-        if (mods_changes())
+        if (toggles_changes(m->page->list))
             m->view = VIEW_CONFIRM;
         else
             set_status(m, "Nothing to apply: no mods changed.", 0);
@@ -787,6 +828,7 @@ void host_menu_run(void)
         return;
 
     menu m;
+    m.page = &mods_page;
     m.view = VIEW_MAIN;
     m.cursor = ITEM_MODS;
     m.mod_cursor = m.mod_first = 0;

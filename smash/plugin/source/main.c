@@ -1,13 +1,8 @@
 /* Writes SaltySD's game-side patches into the running game before it starts. */
 
 #include "types.h"
-
-typedef struct {
-    u32       addr;
-    u32       len;
-    const u8 *want;
-    const u8 *orig;
-} SaltyPatch;
+#include "salt_patch.h"
+#include "plugins.h"
 
 typedef struct {
     u32       addr;
@@ -134,6 +129,7 @@ void plugin_main(void)
     if (check_all()) {
         saltysd_status.applied = apply_all();
         saltysd_status.stage = 2;
+        plugins_load(saltysd_patches, NUM_PATCHES, SALTYSD_CODE_END);
     } else {
         saltysd_status.refused = 1;
         if (!undone)
