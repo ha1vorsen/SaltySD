@@ -11,12 +11,12 @@ typedef struct {
     unsigned int verified;
     unsigned int refused;
     unsigned int menu_site;
-    unsigned int menu_opens;
-    unsigned int menu_top_fb;
-    unsigned int menu_top_fb_right;
-    unsigned int menu_bottom_fb;
-    unsigned int menu_formats;
-    unsigned int menu_exit_reason;
+    unsigned int tetra_opens;
+    unsigned int tetra_top_fb;
+    unsigned int tetra_top_fb_right;
+    unsigned int tetra_bottom_fb;
+    unsigned int tetra_formats;
+    unsigned int tetra_exit_reason;
     unsigned int mods_listed;
     unsigned int mods_changed;
     int last_fs_result;
@@ -32,6 +32,7 @@ typedef struct {
     unsigned int plugins_applied;
     unsigned int plugins_refused;
     int plugins_result;
+    unsigned int plugins_incompatible;
 } saltysd_status_t;
 
 extern volatile saltysd_status_t saltysd_status;
