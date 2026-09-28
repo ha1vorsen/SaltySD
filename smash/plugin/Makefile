@@ -112,7 +112,7 @@ else
 endif
 	@echo '#define SALTYSD_BUILT_AT "$(BUILT_AT)"' >> $@
 
-$(BUILD)/resource_mod.o $(BUILD)/host_menu.o $(BUILD)/update.o: $(BUILD)/buildinfo.h
+$(BUILD)/resource_mod.o $(BUILD)/tetra_menu.o $(BUILD)/update.o: $(BUILD)/buildinfo.h
 
 # Touched only when SALTYSD_BOOT_LOG changes, so flipping it rebuilds resource_mod.
 $(BUILD)/bootlog.flag: FORCE | $(BUILD)

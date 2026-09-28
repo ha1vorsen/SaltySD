@@ -42,7 +42,7 @@ enum { VIEW_MAIN, VIEW_MODS, VIEW_CONFIRM, VIEW_BUSY, VIEW_CODE, VIEW_OFFER,
        VIEW_INSTALL_CONFIRM, VIEW_REBUILD, VIEW_COUNT };
 
 static const char *const item_names[ITEM_COUNT] = {
-    "Mods", "Plugins", "Rebuild mod index", "Check for updates (stable)",
+    "Mods", "Plugins / Engine", "Rebuild mod index", "Check for updates (stable)",
     "Check for updates (dirty)", "Back",
 };
 
@@ -58,8 +58,8 @@ static const list_page mods_page = {
     "Mods", "No mod folders in /saltysd/smash", "Reading /saltysd/smash", &mods, 1,
 };
 static const list_page plugins_page = {
-    "Plugins", "No plugin folders in /luma/titles/smash/plugins",
-    "Reading /luma/titles/smash/plugins", &plugins, 0,
+    "Plugins / Engine", "No plugins found in /luma/titles/smash/engine/.",
+    "Discovering plugins", &plugins, 0,
 };
 
 typedef struct {
@@ -815,14 +815,14 @@ static u32 run_loop(menu *m)
 static void make_title(void)
 {
     text_buffer line_text = { title_buf, 0 };
-    put_str(&line_text, "SaltySD ");
+    put_str(&line_text, "Tetra Menu ");
     put_str(&line_text, SALTYSD_IDENTITY);
 #ifdef SALTYSD_UPDATE_TEST
     put_str(&line_text, "  TEST BUILD");
 #endif
 }
 
-void host_menu_run(void)
+void tetra_menu_run(void)
 {
     if (!input_open())
         return;
@@ -841,10 +841,10 @@ void host_menu_run(void)
 
     display_frame top, bottom;
     if (display_begin(&m.output, &top, &bottom)) {
-        saltysd_status.menu_top_fb = m.output.has_top ? (u32)top.left : 0;
-        saltysd_status.menu_top_fb_right = m.output.has_top ? (u32)top.right : 0;
-        saltysd_status.menu_bottom_fb = m.output.has_bottom ? (u32)bottom.left : 0;
-        saltysd_status.menu_formats =
+        saltysd_status.tetra_top_fb = m.output.has_top ? (u32)top.left : 0;
+        saltysd_status.tetra_top_fb_right = m.output.has_top ? (u32)top.right : 0;
+        saltysd_status.tetra_bottom_fb = m.output.has_bottom ? (u32)bottom.left : 0;
+        saltysd_status.tetra_formats =
             (m.output.has_top ? top.layout.format : 0xFF) << 8 |
             (m.output.has_bottom ? bottom.layout.format : 0xFF);
     }
@@ -855,7 +855,7 @@ void host_menu_run(void)
 
     u32 reason = run_loop(&m);
     fs_close();
-    saltysd_status.menu_exit_reason = reason;
+    saltysd_status.tetra_exit_reason = reason;
     if (reason != EXIT_BACK)
         return;
 
