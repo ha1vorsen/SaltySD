@@ -25,7 +25,7 @@ static const u32 menu_sig[SIG_WORDS] = {
     0xE2840058, BL_AL,      0xE350004A,
 };
 
-void host_menu_run(void);
+void tetra_menu_run(void);
 
 static int is_menu(const char *name)
 {
@@ -121,7 +121,7 @@ u32 saltysd_menu_state(u32 state, u32 caller)
         state != STATE_NOTICES)
         return state;
 
-    saltysd_status.menu_opens++;
-    host_menu_run();
+    saltysd_status.tetra_opens++;
+    tetra_menu_run();
     return STATE_MAIN_MENU;
 }
