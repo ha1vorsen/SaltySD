@@ -223,6 +223,13 @@ print("cro_load_setup equ (" + hex(arm_branch_target(f, f.find(cro_file_size_sig
 print("cro_raw_free equ (" + hex(f.find(cro_raw_free_sig)+0x100000) + ")", file=common_armips)
 print("cro_queue_submit equ (" + hex(f.find(cro_queue_submit_sig)+0x100000) + ")", file=common_armips)
 print("cro_request_free equ (" + hex(arm_branch_target(f, f.find(cro_file_size_sig)+0x1BC)) + ")", file=common_armips)
+_cro_mapped = f.find(cro_file_size_sig) + 0x100
+if (r32(f, _cro_mapped - 0x4) != 0xE1A00007 or
+        r32(f, _cro_mapped) != 0xE320F000 or
+        (r32(f, _cro_mapped + 0x4) >> 24) != 0xEB or
+        r32(f, _cro_mapped + 0x8) != 0xE8840180):
+    raise ValueError("CRO worker no longer matches the audited load/publish sequence")
+print("cro_mapped_hook_loc equ (" + hex(_cro_mapped+0x100000) + ")", file=common_armips)
 
 _menu_name = f.find(cro_menu_name_sig)
 _minigame_name = f.find(cro_minigame_name_sig)

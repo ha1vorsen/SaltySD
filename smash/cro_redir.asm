@@ -1096,6 +1096,8 @@ meme2: .ascii "file override",0
    bl saltysd_cro_post
 .org cro_minigame_load_hook_loc
    bl cro_minigame_load_checked
+.org cro_mapped_hook_loc
+   bl saltysd_cro_mapped
 
 .org saltysd_island+0x220
 saltysd_cro_post:
@@ -1107,9 +1109,6 @@ saltysd_menu_tramp:
 
 saltysd_cro_post_body:
    push {r4, lr}
-   mov r0, r4
-   ldr r12, =0x07000118
-   blx r12
    ldr r0, [r4, #0x8]
    tst r0, #0x80000000
    beq saltysd_cro_post_done
@@ -1202,6 +1201,16 @@ cro_minigame_load_checked_unexpected_return:
 cro_minigame_load_checked_done:
    pop {r4, pc}
 cro_minigame_load_checked_end:
+
+; Runs in the CRO worker once LoadCRO_New has mapped and fixed a module,
+; before the game first calls into it, so the plugin sees every loaded
+; CRO exactly once. r0 holds the mapped base and must survive the call.
+saltysd_cro_mapped:
+   push {r0-r3, r12, lr}
+   ldr r12, =0x07000118
+   blx r12
+   pop {r0-r3, r12, pc}
+saltysd_cro_mapped_end:
 
 .pool
 saltysd_hook_end:

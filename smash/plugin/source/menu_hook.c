@@ -87,22 +87,14 @@ static void set_menu_site(u32 base)
     saltysd_status.menu_site = site;
 }
 
-void *saltysd_cro_loaded(void *request)
+void saltysd_cro_loaded(u32 base)
 {
-    if (!request)
-        return request;
-
-    u32 status = *((u32 *)request + 2);
-    if (status & 0x80000000u)
-        return request;
-
-    u32 base = *(u32 *)request;
     if (!base)
-        return request;
+        return;
 
     u32 magic = *(u32 *)(base + CRO_MAGIC_OFFS);
     if (magic != CRO_MAGIC_LOADED && magic != CRO_MAGIC_FIXED)
-        return request;
+        return;
 
     u32 name = *(u32 *)(base + CRO_NAME_OFFS);
     if (name < base)
@@ -110,8 +102,6 @@ void *saltysd_cro_loaded(void *request)
 
     if (is_menu((const char *)name))
         set_menu_site(base);
-
-    return request;
 }
 
 u32 saltysd_menu_state(u32 state, u32 caller)
