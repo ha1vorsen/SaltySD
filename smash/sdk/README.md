@@ -25,20 +25,22 @@ SaltySD does not write to fixed addresses. For every segment the tool picks a si
 
 `--also` checks the result against other `code.bin` files and reports how far each segment moved, or why it does not resolve there. `convert` exits with status 3 when any `--also` file fails, after still writing the `.sea`.
 
-## SEA v1 limits
+## Salt Engine 1.1 limits
 
-SEA v1 is a stopgap format. SaltySD's plugin system is planned to be replaced.
+SE 1.1 is the current stopgap format. Each SEA declares the loader features it requires. Future loaders retain support for existing features so a compatible SEA remains loadable without being rebuilt.
 
-- Byte patches only. Each segment overwrites part of `code.bin` (from `0x00100000` to its end) once, at boot, before the game's first instruction. There are no hooks, callbacks, imports or new memory. New code has to fit in space the plugin overwrites itself.
-- CROs, RomFS files and the heap cannot be patched.
-- Every signature must match exactly once. If one is missing or matches more than once, the whole plugin is skipped.
+- Byte patches only. A segment overwrites part of `code.bin` once at boot or part of a named CRO's code each time that CRO loads. There are no callbacks, imports or new memory.
+- RomFS files and the heap cannot be patched.
+- Every signature must match exactly once within its target's code. If one is missing or matches more than once, that file's patches are refused.
 - SaltySD searches the game after writing its own patches and those of plugins that loaded earlier. A signature that covers bytes one of them changed will not be found. `--also` and `info --code` check against clean `code.bin` files, so they cannot catch this.
-- Only ARM `B`/`BL` branches are re-aimed automatically. Absolute addresses in a segment (literal pools, pointer tables) and Thumb branches are not, so a segment holding them only works where those addresses did not move.
+- Only ARM `B`/`BL` branches are re-aimed automatically. A branch from a CRO may target the main binary or the same CRO. A branch from the main binary to a CRO, or from one CRO to another, is refused.
 - At most 64 signatures per plugin, each 4 to 64 bytes.
 - No segment may be empty, and each segment's file size must equal its memory size (no `.bss`).
 - A `.sea` is at most 64 KiB. All plugins together hold at most 256 segments.
+- Data needed for CRO patches is retained in the game's heap. SaltySD allocates only the CRO data used by enabled SEA files and reserves nothing when no CRO patches are installed. The practical limit is the available heap—about 1.75 MiB in the current build—not a fixed store size or file count.
 - Before writing anything, SaltySD checks that the game's bytes at each found address match the original bytes stored in the `.sea`. If any differ, the whole plugin is skipped.
 - A plugin may not touch bytes that SaltySD patches itself or that an earlier plugin has claimed. Plugins load in folder name order, and a later one that collides is skipped.
-- A plugin applies completely or not at all. Skipped plugins are not reported on screen.
-- Every enabled plugin searches all of `code.bin` once at boot, which adds to the game's start-up time.
+- At boot, validation and main-binary patching are all or nothing per file. If that fails, its CRO patches are discarded. Each time a CRO loads, that file's patches for the CRO apply completely or not at all.
+- CRO signatures are searched on the first load. Later loads recheck the bytes at the cached offset before applying anything.
+- Refused plugins are not reported on screen.
 - Turning a plugin on or off takes effect the next time the game starts.

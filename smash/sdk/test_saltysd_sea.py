@@ -8,8 +8,10 @@ import subprocess
 import tempfile
 import unittest
 
-from saltysd_sea import (BASE, SEA_VERSION, SeaError, build_plugin, convert, describe, main,
-                         read_elf, resolve, write_plugin)
+from saltysd_sea import (BASE, FEATURE_CRO_TARGETS, NOTE_FEATURES, NOTE_TARGETS, SEA_VERSION,
+                         SeaError, build_plugin, convert, cro_target, describe, main,
+                         parse_features, parse_locators, parse_targets, read_elf, resolve, window,
+                         write_plugin)
 
 READELF = shutil.which("arm-none-eabi-readelf") or shutil.which(
     "arm-none-eabi-readelf", path=os.path.join(os.environ.get("DEVKITARM", ""), "bin"))
@@ -79,6 +81,52 @@ def shifted(code, at, count):
     return code[:at - BASE] + random.Random(2).randbytes(count) + code[at - BASE:]
 
 
+MODULE_LINK = 0x00900000
+MODULE_CODE = 0x180
+MODULE_CODE_SIZE = 0x2000
+
+
+def fake_module(name="module_a", relocations=()):
+    data = bytearray(random.Random(7).randbytes(0x4000))
+    data[0x80:0x84] = b"CRO0"
+    struct.pack_into("<I", data, 0x84, 0x3000)
+    struct.pack_into("<II", data, 0xB0, MODULE_CODE, MODULE_CODE_SIZE)
+    struct.pack_into("<II", data, 0xC8, 0x3100, 1)
+    struct.pack_into("<III", data, 0x3100, MODULE_CODE, MODULE_CODE_SIZE, 0)
+    data[0x3000:0x3000 + len(name) + 1] = name.encode("ascii") + b"\0"
+    struct.pack_into("<II", data, 0xF8, 0x3200, len(relocations))
+    struct.pack_into("<II", data, 0x128, 0x3200 + 12 * len(relocations), 0)
+    struct.pack_into("<II", data, 0x130, 0x3200 + 12 * len(relocations), 0)
+    for i, file_offset in enumerate(relocations):
+        struct.pack_into("<III", data, 0x3200 + 12 * i,
+                         ((file_offset - MODULE_CODE) << 4), 0x102, 0)
+    return bytes(data)
+
+
+def module_view(name="module_a", base=MODULE_LINK, relocations=()):
+    return cro_target(fake_module(name, relocations), base, name)
+
+
+def append_feature(data, feature):
+    out = bytearray(data)
+    headers = program_headers(out)
+    feature_index = next(i for i, p in enumerate(headers)
+                         if p[0] == 4 and struct.unpack_from("<I", out, p[1] + 8)[0] == NOTE_FEATURES)
+    feature_header = headers[feature_index]
+    insert_at = feature_header[1] + feature_header[4]
+    out[insert_at:insert_at] = struct.pack("<I", feature)
+    phoff, = struct.unpack_from("<I", out, 28)
+    for i, header in enumerate(headers):
+        entry = phoff + i * 32
+        if header[1] >= insert_at:
+            struct.pack_into("<I", out, entry + 4, header[1] + 4)
+    entry = phoff + feature_index * 32
+    struct.pack_into("<I", out, entry + 16, feature_header[4] + 4)
+    struct.pack_into("<I", out, entry + 20, feature_header[5] + 4)
+    struct.pack_into("<I", out, feature_header[1] + 4, 8)
+    return bytes(out)
+
+
 class Layout(unittest.TestCase):
     def setUp(self):
         self.data = build_plugin(SEGMENTS, CODE)
@@ -97,15 +145,12 @@ class Layout(unittest.TestCase):
         want = CODE[0x40:0x46] + CODE[0x100:0x104]
         self.assertEqual(saltysd_notes(self.data)[1], want)
 
-    def test_version_note_comes_first(self):
+    def test_baseline_has_no_features_or_version_note(self):
         notes = [p for p in program_headers(self.data) if p[0] == 4]
-        self.assertEqual(len(notes), 4)
-        off = notes[0][1]
-        namesz, descsz, kind = struct.unpack_from("<III", self.data, off)
-        self.assertEqual((namesz, descsz, kind), (8, 4, 2))
-        self.assertEqual(self.data[off + 12:off + 20], b"SaltySD\0")
-        self.assertEqual(struct.unpack_from("<I", self.data, off + 20)[0], SEA_VERSION)
-        self.assertEqual(SEA_VERSION, 1)
+        self.assertEqual(len(notes), 3)
+        self.assertNotIn(2, saltysd_notes(self.data))
+        self.assertNotIn(NOTE_FEATURES, saltysd_notes(self.data))
+        self.assertEqual(SEA_VERSION, "1.1")
 
     def test_resolves_to_its_own_addresses(self):
         _, placed = resolve(self.data, CODE)
@@ -179,6 +224,78 @@ class Fixups(unittest.TestCase):
         self.assertNotIn(5, saltysd_notes(sea))
 
 
+class CroTargets(unittest.TestCase):
+    def setUp(self):
+        self.module = module_view()
+        self.site = MODULE_LINK + 0x400
+        self.patch = b"\x00\x00\xA0\xE1"
+
+    def make_sea(self):
+        return convert(plain_elf([(self.site, self.patch)]), CODE, cros=[self.module])[0]
+
+    def test_writes_feature_and_target_notes(self):
+        sea = self.make_sea()
+        _, notes = read_elf(sea)
+        sigs, _, _ = parse_locators(notes, 1)
+        features = parse_features(notes)
+        names, targets = parse_targets(notes, len(sigs), features)
+        self.assertEqual(features, [FEATURE_CRO_TARGETS])
+        self.assertEqual(names, ["module_a"])
+        self.assertTrue(targets and all(target == 1 for target in targets))
+        self.assertIn(NOTE_TARGETS, notes)
+        self.assertNotIn(2, notes)
+
+    def test_resolves_in_named_cro(self):
+        sea = self.make_sea()
+        _, placed = resolve(sea, CODE, [self.module])
+        self.assertEqual(placed, [(self.site, self.patch, self.site)])
+        lines = describe(sea, CODE, [self.module])
+        self.assertTrue(any("module_a:0x00900400" in line for line in lines))
+        self.assertTrue(any("features: CRO targets" in line for line in lines))
+
+    def test_relocated_words_are_masked_in_signature_windows(self):
+        module = module_view(relocations=(0x400,))
+        pattern, mask = window(module.code, MODULE_LINK + 0x400, 8,
+                               module.start, module.relocations)
+        self.assertEqual(pattern[:4], bytes(4))
+        self.assertEqual(mask[:4], bytes(4))
+        self.assertEqual(mask[4:], b"\xFF" * 4)
+
+    def test_segment_cannot_overlap_relocation(self):
+        module = module_view(relocations=(0x400,))
+        with self.assertRaisesRegex(SeaError, "relocated CRO word"):
+            convert(plain_elf([(self.site, self.patch)]), CODE, cros=[module])
+
+    def test_cro_can_branch_to_main_binary(self):
+        sea, report = convert(plain_elf([(self.site, bl(self.site, BASE + 0x100))]),
+                              CODE, cros=[self.module])
+        self.assertEqual(len(report), 1)
+        _, notes = read_elf(sea)
+        sigs, _, fixups = parse_locators(notes, 1)
+        _, targets = parse_targets(notes, len(sigs), parse_features(notes))
+        self.assertEqual(len(fixups), 1)
+        self.assertEqual(targets[fixups[0][3]], 0)
+
+    def test_main_binary_cannot_branch_to_cro(self):
+        main_site = BASE + 0x100
+        data = plain_elf([(main_site, bl(main_site, self.site)), (self.site, self.patch)])
+        with self.assertRaisesRegex(SeaError, "code.bin to a CRO"):
+            convert(data, CODE, cros=[self.module])
+
+    def test_one_cro_cannot_branch_to_another(self):
+        other = module_view("module_b", MODULE_LINK + 0x100000)
+        other_site = other.start + 0x300
+        data = plain_elf([(self.site, bl(self.site, other_site)),
+                          (other_site, b"\x00\x00\xA0\xE1")])
+        with self.assertRaisesRegex(SeaError, "one CRO to another"):
+            convert(data, CODE, cros=[self.module, other])
+
+    def test_unknown_feature_is_refused(self):
+        sea = append_feature(self.make_sea(), 99)
+        with self.assertRaisesRegex(SeaError, "unsupported SEA feature 99"):
+            resolve(sea, CODE, [self.module])
+
+
 class Refusals(unittest.TestCase):
     def test_overlap(self):
         with self.assertRaises(ValueError):
@@ -206,7 +323,7 @@ class Convert(unittest.TestCase):
         sea, _ = convert(legacy_elf(SEGMENTS, CODE), CODE)
         self.assertEqual(loads(sea), sorted(SEGMENTS))
         self.assertEqual(saltysd_notes(sea)[1], CODE[0x40:0x46] + CODE[0x100:0x104])
-        self.assertEqual(struct.unpack("<I", saltysd_notes(sea)[2])[0], 1)
+        self.assertNotIn(2, saltysd_notes(sea))
 
     def test_same_bytes_as_building_directly(self):
         self.assertEqual(convert(legacy_elf(SEGMENTS, CODE), CODE)[0], build_plugin(SEGMENTS, CODE))
@@ -243,12 +360,10 @@ class Convert(unittest.TestCase):
         with self.assertRaisesRegex(SeaError, "original-bytes note"):
             convert(bytes(data), CODE)
 
-    def test_newer_version_is_refused(self):
-        sea = bytearray(build_plugin(SEGMENTS, CODE))
-        off = [p for p in program_headers(sea) if p[0] == 4][0][1]
-        struct.pack_into("<I", sea, off + 20, 2)
-        with self.assertRaisesRegex(SeaError, "SEA v2"):
-            convert(bytes(sea), CODE)
+    def test_version_note_is_not_required(self):
+        sea = build_plugin(SEGMENTS, CODE)
+        self.assertNotIn(2, saltysd_notes(sea))
+        self.assertEqual(convert(sea, CODE)[0], sea)
 
     def test_object_file_is_refused(self):
         data = bytearray(plain_elf(SEGMENTS))
@@ -258,7 +373,7 @@ class Convert(unittest.TestCase):
 
     def test_describe(self):
         lines = describe(build_plugin(SEGMENTS, CODE), CODE)
-        self.assertEqual(lines[0], "SEA v1")
+        self.assertEqual(lines[0], "SEA 1.1")
         self.assertTrue(any("0x00100040" in line and "-> 0x00100040" in line for line in lines))
 
     def test_describe_file_without_signatures(self):
@@ -295,6 +410,25 @@ class CommandLine(unittest.TestCase):
             self.assertEqual(status, 0)
             _, status = self.run_main(tmp, "p.elf", legacy_elf(SEGMENTS, CODE), "--also", broken)
             self.assertEqual(status, 3)
+
+    def test_cro_argument(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "module_a.elf")
+            site = MODULE_LINK + 0x400
+            with open(src, "wb") as f:
+                f.write(plain_elf([(site, b"\x00\x00\xA0\xE1")]))
+            code = os.path.join(tmp, "code.bin")
+            with open(code, "wb") as f:
+                f.write(CODE)
+            cro = os.path.join(tmp, "module_a.cro")
+            with open(cro, "wb") as f:
+                f.write(fake_module())
+            self.assertEqual(main(["convert", src, "--code", code,
+                                   "--cro", f"{cro}@0x{MODULE_LINK:X}"]), 0)
+            with open(os.path.join(tmp, "module_a.sea"), "rb") as f:
+                _, notes = read_elf(f.read())
+            self.assertIn(NOTE_FEATURES, notes)
+            self.assertIn(NOTE_TARGETS, notes)
 
     def test_error_is_a_message_not_a_traceback(self):
         with tempfile.TemporaryDirectory() as tmp:
