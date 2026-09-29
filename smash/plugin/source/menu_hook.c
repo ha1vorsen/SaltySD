@@ -1,4 +1,5 @@
 #include "common.h"
+#include "plugins.h"
 #include "status.h"
 
 #include "types.h"
@@ -102,6 +103,7 @@ void saltysd_cro_loaded(u32 base)
 
     if (is_menu((const char *)name))
         set_menu_site(base);
+    plugins_cro_loaded(base);
 }
 
 u32 saltysd_menu_state(u32 state, u32 caller)
