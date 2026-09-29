@@ -27,6 +27,7 @@ ROUTINES = (
     ("saltysd_cro_post_body", "cro_worker_fail_missing", True),
     ("cro_worker_fail_loaded", "cro_worker_fail_publish", True),
     ("cro_minigame_load_checked", "cro_minigame_load_checked_end", True),
+    ("saltysd_cro_mapped", "saltysd_cro_mapped_end", True),
 )
 
 
