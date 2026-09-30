@@ -11,4 +11,5 @@ SaltySD is a collection of modifications for 3DS ROMs which allows them to load 
 Files are redirected into their own directory under sdmc:/saltysd/ based on the subdirectory name in the respository (i.e. Pokemon Sun and Moon load their override files from sdmc:/saltysd/SunMoon/). Smash is a unique case here, so for further information, patching instructions can be found in the PATCHING.md files in each subdirectory.
 
 **Building**
+
 Currently, you must git clone this repository, and run make in the the game directory of your choosing with a supplied code.bin in the same directory. (On release it will no longer be necessary to git clone.)
