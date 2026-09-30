@@ -48,12 +48,14 @@
 #define NOTE_OWNER        "SaltySD"
 #define NOTE_OWNER_SIZE   8
 #define NOTE_ORIGINAL     1
+#define NOTE_SEA_VERSION  2
 #define NOTE_SIGNATURES   3
 #define NOTE_PLACEMENT    4
 #define NOTE_FIXUPS       5
 #define NOTE_FEATURES     6
 #define NOTE_TARGETS      7
 #define FEATURE_CRO       1
+#define SEA_VERSION       0x00010002
 
 #define SIG_BYTES_MAX     64
 #define PLACEMENT_SIZE    8
@@ -328,6 +330,17 @@ static int read_features(const u8 *f, u32 len, const elf_header *hdr, int *has_c
             return PLUGIN_INCOMPATIBLE;
         *has_cro = 1;
     }
+    return PLUGIN_OK;
+}
+
+/* SEA 1.1 files predate the version note. SEA 1.2 names its exact wire format. */
+static int read_version(const u8 *f, u32 len, const elf_header *hdr)
+{
+    const u8 *desc;
+    u32 desc_len;
+    int found = find_note(f, len, hdr, NOTE_SEA_VERSION, &desc, &desc_len);
+    if (found < 0 || (found && (desc_len != 4 || rd32(desc) != SEA_VERSION)))
+        return PLUGIN_INCOMPATIBLE;
     return PLUGIN_OK;
 }
 
@@ -675,6 +688,10 @@ static int check_file(u8 *f, u32 len, cro_plugin **retained)
     *retained = 0;
     elf_header hdr;
     int res = read_header(f, len, &hdr);
+    if (res)
+        return res;
+
+    res = read_version(f, len, &hdr);
     if (res)
         return res;
 
