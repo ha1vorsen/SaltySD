@@ -8,8 +8,9 @@ import subprocess
 import tempfile
 import unittest
 
-from saltysd_sea import (BASE, FEATURE_CRO_TARGETS, NOTE_FEATURES, NOTE_TARGETS, SEA_VERSION,
-                         SeaError, build_plugin, convert, cro_target, describe, main,
+from saltysd_sea import (BASE, FEATURE_CRO_TARGETS, NOTE_FEATURES, NOTE_SEA_VERSION,
+                         NOTE_TARGETS, SEA_VERSION, SEA_VERSION_PACKED, SeaError,
+                         build_plugin, convert, cro_target, describe, ips_segments, main,
                          parse_features, parse_locators, parse_targets, read_elf, resolve, window,
                          write_plugin)
 
@@ -75,6 +76,18 @@ def loads(data):
 
 def bl(site, target):
     return struct.pack("<I", 0xEB000000 | (((target - (site + 8)) >> 2) & 0xFFFFFF))
+
+
+def ips_record(offset, data):
+    return offset.to_bytes(3, "big") + len(data).to_bytes(2, "big") + data
+
+
+def ips_rle(offset, size, value):
+    return offset.to_bytes(3, "big") + b"\0\0" + size.to_bytes(2, "big") + bytes([value])
+
+
+def ips(*records):
+    return b"PATCH" + b"".join(records) + b"EOF"
 
 
 def shifted(code, at, count):
@@ -145,12 +158,13 @@ class Layout(unittest.TestCase):
         want = CODE[0x40:0x46] + CODE[0x100:0x104]
         self.assertEqual(saltysd_notes(self.data)[1], want)
 
-    def test_baseline_has_no_features_or_version_note(self):
+    def test_v12_has_a_version_note(self):
         notes = [p for p in program_headers(self.data) if p[0] == 4]
-        self.assertEqual(len(notes), 3)
-        self.assertNotIn(2, saltysd_notes(self.data))
+        self.assertEqual(len(notes), 4)
+        self.assertEqual(saltysd_notes(self.data)[NOTE_SEA_VERSION],
+                         struct.pack("<I", SEA_VERSION_PACKED))
         self.assertNotIn(NOTE_FEATURES, saltysd_notes(self.data))
-        self.assertEqual(SEA_VERSION, "1.1")
+        self.assertEqual(SEA_VERSION, "1.2")
 
     def test_resolves_to_its_own_addresses(self):
         _, placed = resolve(self.data, CODE)
@@ -243,7 +257,7 @@ class CroTargets(unittest.TestCase):
         self.assertEqual(names, ["module_a"])
         self.assertTrue(targets and all(target == 1 for target in targets))
         self.assertIn(NOTE_TARGETS, notes)
-        self.assertNotIn(2, notes)
+        self.assertEqual(notes[NOTE_SEA_VERSION], struct.pack("<I", SEA_VERSION_PACKED))
 
     def test_resolves_in_named_cro(self):
         sea = self.make_sea()
@@ -323,7 +337,8 @@ class Convert(unittest.TestCase):
         sea, _ = convert(legacy_elf(SEGMENTS, CODE), CODE)
         self.assertEqual(loads(sea), sorted(SEGMENTS))
         self.assertEqual(saltysd_notes(sea)[1], CODE[0x40:0x46] + CODE[0x100:0x104])
-        self.assertNotIn(2, saltysd_notes(sea))
+        self.assertEqual(saltysd_notes(sea)[NOTE_SEA_VERSION],
+                         struct.pack("<I", SEA_VERSION_PACKED))
 
     def test_same_bytes_as_building_directly(self):
         self.assertEqual(convert(legacy_elf(SEGMENTS, CODE), CODE)[0], build_plugin(SEGMENTS, CODE))
@@ -360,10 +375,25 @@ class Convert(unittest.TestCase):
         with self.assertRaisesRegex(SeaError, "original-bytes note"):
             convert(bytes(data), CODE)
 
-    def test_version_note_is_not_required(self):
+    def test_old_v11_without_version_note_is_accepted(self):
         sea = build_plugin(SEGMENTS, CODE)
-        self.assertNotIn(2, saltysd_notes(sea))
-        self.assertEqual(convert(sea, CODE)[0], sea)
+        data = bytearray(sea)
+        header = program_headers(data)[0]
+        self.assertEqual(struct.unpack_from("<I", data, header[1] + 8)[0], NOTE_SEA_VERSION)
+        phoff, = struct.unpack_from("<I", data, 28)
+        # A non-note program header is ignored, as a genuinely absent v1.1 note is.
+        struct.pack_into("<I", data, phoff, 0)
+        self.assertEqual(describe(bytes(data))[0], "SEA 1.1")
+        self.assertEqual(resolve(bytes(data), CODE)[1], resolve(sea, CODE)[1])
+
+    def test_unknown_version_is_refused(self):
+        sea = build_plugin(SEGMENTS, CODE)
+        data = bytearray(sea)
+        version = next(p for p in program_headers(data)
+                       if p[0] == 4 and struct.unpack_from("<I", data, p[1] + 8)[0] == NOTE_SEA_VERSION)
+        struct.pack_into("<I", data, version[1] + 20, 0x00010003)
+        with self.assertRaisesRegex(SeaError, "unsupported SEA version"):
+            resolve(bytes(data), CODE)
 
     def test_object_file_is_refused(self):
         data = bytearray(plain_elf(SEGMENTS))
@@ -373,12 +403,42 @@ class Convert(unittest.TestCase):
 
     def test_describe(self):
         lines = describe(build_plugin(SEGMENTS, CODE), CODE)
-        self.assertEqual(lines[0], "SEA 1.1")
+        self.assertEqual(lines[0], "SEA 1.2")
         self.assertTrue(any("0x00100040" in line and "-> 0x00100040" in line for line in lines))
 
     def test_describe_file_without_signatures(self):
         lines = describe(legacy_elf(SEGMENTS, CODE))
         self.assertTrue(any("older tool" in line for line in lines))
+
+
+class Ips(unittest.TestCase):
+    def test_records_and_rle_preserve_final_ips_bytes(self):
+        first = bytes(b ^ 0xFF for b in CODE[0x100:0x104])
+        final = bytes(b ^ 0x55 for b in CODE[0x102:0x106])
+        rle_value = CODE[0x200] ^ 0xAA
+        data = ips(ips_record(0x100, first), ips_record(0x102, final),
+                   ips_rle(0x200, 3, rle_value))
+        segments = ips_segments(data, CODE)
+        sea = build_plugin(segments, CODE, branch_fixups=False)
+        _, placed = resolve(sea, CODE)
+        actual = bytearray(CODE)
+        for addr, replacement, _ in placed:
+            actual[addr - BASE:addr - BASE + len(replacement)] = replacement
+        expected = bytearray(CODE)
+        expected[0x100:0x104] = first
+        expected[0x102:0x106] = final
+        expected[0x200:0x203] = bytes([rle_value]) * 3
+        self.assertEqual(actual, expected)
+
+    def test_rejects_fixed_size_violations(self):
+        with self.assertRaisesRegex(SeaError, "outside code.bin"):
+            ips_segments(ips(ips_record(len(CODE), b"\0")), CODE)
+        with self.assertRaisesRegex(SeaError, "truncation"):
+            ips_segments(ips() + b"\0\0\0", CODE)
+
+    def test_rejects_a_noop_ips(self):
+        with self.assertRaisesRegex(SeaError, "does not change"):
+            ips_segments(ips(ips_record(0x100, CODE[0x100:0x104])), CODE)
 
 
 class CommandLine(unittest.TestCase):
@@ -429,6 +489,18 @@ class CommandLine(unittest.TestCase):
                 _, notes = read_elf(f.read())
             self.assertIn(NOTE_FEATURES, notes)
             self.assertIn(NOTE_TARGETS, notes)
+
+    def test_ips_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "old.ips")
+            with open(source, "wb") as f:
+                f.write(ips(ips_record(0x100, bytes(b ^ 0xFF for b in CODE[0x100:0x104]))))
+            code = os.path.join(tmp, "code.bin")
+            with open(code, "wb") as f:
+                f.write(CODE)
+            self.assertEqual(main(["ips", source, "--code", code]), 0)
+            with open(os.path.join(tmp, "old.sea"), "rb") as f:
+                self.assertEqual(describe(f.read())[0], "SEA 1.2")
 
     def test_error_is_a_message_not_a_traceback(self):
         with tempfile.TemporaryDirectory() as tmp:

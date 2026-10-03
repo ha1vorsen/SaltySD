@@ -10,6 +10,20 @@ python saltysd_sea.py info highpoly.sea --code eur_code.bin
 
 Install a plugin as `sd:/luma/titles/smash/engine/<name>/<name>.sea`, one `.sea` per folder. Turn it on or off in the Tetra Menu submenu under Plugins / Engine.
 
+## I have an IPS
+
+Use the exact clean, decompressed `code.bin` that the standalone IPS was made
+for. SE reads its original bytes from that file, and refuses to patch a game
+whose bytes do not match.
+
+```
+python saltysd_sea.py ips old_patch.ips --code usa_code.bin -o old_patch.sea
+python saltysd_sea.py ips old_patch.ips --code usa_code.bin --also eur_code.bin
+```
+
+The importer accepts ordinary and RLE IPS records, applies them in IPS order,
+and turns the final changed byte runs into SE segments. 
+
 ## Input
 
 A 32-bit little-endian ARM ELF of type `EXEC`, linked at the addresses of the `code.bin` passed with `--code`. Each `PT_LOAD` segment is one patch. The game's original bytes come from the ELF's `SaltySD` note if it has one, as older SaltySD plugins do, and otherwise from `--code`. An older `.sea` can be passed as input too.
@@ -25,9 +39,9 @@ SaltySD does not write to fixed addresses. For every segment the tool picks a si
 
 `--also` checks the result against other `code.bin` files and reports how far each segment moved, or why it does not resolve there. `convert` exits with status 3 when any `--also` file fails, after still writing the `.sea`.
 
-## Salt Engine 1.1 limits
+## Salt Engine 1.2 limits
 
-SE 1.1 is the current stopgap format. Each SEA declares the loader features it requires. Future loaders retain support for existing features so a compatible SEA remains loadable without being rebuilt.
+SE 1.2 is the current stopgap format. 
 
 - Byte patches only. A segment overwrites part of `code.bin` once at boot or part of a named CRO's code each time that CRO loads. There are no callbacks, imports or new memory.
 - RomFS files and the heap cannot be patched.

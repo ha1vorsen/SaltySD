@@ -8,7 +8,8 @@ import sys
 
 BASE = 0x100000
 
-SEA_VERSION = "1.1"
+SEA_VERSION = "1.2"
+SEA_VERSION_PACKED = 0x00010002
 SEA_BYTES_MAX = 0x10000
 SEA_SEGMENTS_MAX = 256
 SEA_SIGNATURES_MAX = 64
@@ -41,8 +42,8 @@ FIXUP_ABS32 = 2
 FIXUP_NAMES = {FIXUP_BRANCH: "branch", FIXUP_ABS32: "abs32"}
 BRANCH_REACH = 0x800000
 
-LIMITS_EPILOG = ("SEA 1.1 finds each patch by a signature in code.bin or a named CRO. "
-                 "See README.md for every SEA 1.1 limit.")
+LIMITS_EPILOG = ("SEA 1.2 finds each patch by a signature in code.bin or a named CRO. "
+                 "See README.md for every SEA 1.2 limit.")
 
 
 class SeaError(ValueError):
@@ -333,7 +334,7 @@ def check_patches(patches, targets=None):
     if not patches:
         raise SeaError("no PT_LOAD segments, so there is nothing to patch")
     if len(patches) > SEA_SEGMENTS_MAX:
-        raise SeaError(f"{len(patches)} segments; SEA 1.1 allows at most {SEA_SEGMENTS_MAX}")
+        raise SeaError(f"{len(patches)} segments; SEA 1.2 allows at most {SEA_SEGMENTS_MAX}")
     last = {}
     for vaddr, data, original, target in patches:
         if not data:
@@ -386,7 +387,7 @@ def build_sea(patches, sigs, placement, fixups=(), target_names=(), sig_targets=
     patches = normalized
     check_patches(patches)
     if not sigs or len(sigs) > SEA_SIGNATURES_MAX:
-        raise SeaError(f"SEA 1.1 needs 1 to {SEA_SIGNATURES_MAX} signatures")
+        raise SeaError(f"SEA 1.2 needs 1 to {SEA_SIGNATURES_MAX} signatures")
     if len(placement) != len(patches):
         raise SeaError("every segment needs a placement")
     if sig_targets is None:
@@ -427,7 +428,8 @@ def build_sea(patches, sigs, placement, fixups=(), target_names=(), sig_targets=
         if kind not in FIXUP_NAMES:
             raise SeaError(f"unknown fix-up kind {kind}")
 
-    notes = [make_note(NOTE_ORIGINAL, b"".join(original for _, _, original, _ in patches)),
+    notes = [make_note(NOTE_SEA_VERSION, struct.pack("<I", SEA_VERSION_PACKED)),
+             make_note(NOTE_ORIGINAL, b"".join(original for _, _, original, _ in patches)),
              make_note(NOTE_SIGNATURES, sig_desc),
              make_note(NOTE_PLACEMENT, place_desc)]
     if fixups:
@@ -457,7 +459,7 @@ def build_sea(patches, sigs, placement, fixups=(), target_names=(), sig_targets=
                                EF_ARM_EABI5_HARD, EHDR_SIZE, PHDR_SIZE, phnum, 0, 0, 0)
     sea = ehdr + b"".join(phdrs) + bytes(body)
     if len(sea) > SEA_BYTES_MAX:
-        raise SeaError(f"the .sea would be {len(sea)} bytes; SEA 1.1 allows at most {SEA_BYTES_MAX}")
+        raise SeaError(f"the .sea would be {len(sea)} bytes; SEA 1.2 allows at most {SEA_BYTES_MAX}")
     return sea
 
 
@@ -503,7 +505,7 @@ def read_elf(data):
         if p_type == PT_LOAD:
             if filesz != memsz:
                 raise SeaError(f"segment at 0x{vaddr:08X} has {memsz - filesz} bytes of .bss; "
-                               "SEA 1.1 can only write bytes that are in the file")
+                               "SEA 1.2 can only write bytes that are in the file")
             segments.append((vaddr, data[offset:offset + filesz]))
         elif p_type == PT_NOTE:
             at, end = offset, offset + filesz
@@ -532,6 +534,15 @@ def parse_features(notes, require_known=True):
     if require_known and unknown:
         raise SeaError("unsupported SEA feature " + ", ".join(str(feature) for feature in unknown))
     return features
+
+
+def parse_sea_version(notes):
+    desc = notes.get(NOTE_SEA_VERSION)
+    if desc is None:
+        return "1.1"
+    if len(desc) != 4 or struct.unpack("<I", desc)[0] != SEA_VERSION_PACKED:
+        raise SeaError("unsupported SEA version")
+    return SEA_VERSION
 
 
 def parse_targets(notes, num_sigs, features):
@@ -608,6 +619,7 @@ def parse_locators(notes, num_segments):
 
 def resolve(data, code, cros=()):
     segments, notes = read_elf(data)
+    parse_sea_version(notes)
     sigs, placement, fixups = parse_locators(notes, len(segments))
     features = parse_features(notes)
     target_names, sig_targets = parse_targets(notes, len(sigs), features)
@@ -720,14 +732,76 @@ def convert(data, code_bin, branch_fixups=True, cros=()):
     return sea, report
 
 
+def parse_ips(data, code_len):
+    if not data.startswith(b"PATCH"):
+        raise SeaError("not an IPS patch (missing PATCH header)")
+
+    records = []
+    at = 5
+    while True:
+        if at + 3 > len(data):
+            raise SeaError("IPS patch ends before EOF")
+        if data[at:at + 3] == b"EOF":
+            at += 3
+            if at != len(data):
+                if len(data) - at == 3:
+                    raise SeaError("IPS truncation records cannot patch a fixed-size code.bin")
+                raise SeaError("bytes follow the IPS EOF marker")
+            return records
+
+        offset = int.from_bytes(data[at:at + 3], "big")
+        at += 3
+        if at + 2 > len(data):
+            raise SeaError("IPS patch ends in a record length")
+        size = int.from_bytes(data[at:at + 2], "big")
+        at += 2
+        if size:
+            if at + size > len(data):
+                raise SeaError("IPS patch ends in record data")
+            replacement = data[at:at + size]
+            at += size
+        else:
+            if at + 3 > len(data):
+                raise SeaError("IPS patch ends in an RLE record")
+            size = int.from_bytes(data[at:at + 2], "big")
+            replacement = data[at + 2:at + 3] * size
+            at += 3
+            if not size:
+                raise SeaError("IPS patch has an empty RLE record")
+        if offset > code_len or size > code_len - offset:
+            raise SeaError(f"IPS record at 0x{offset:06X} runs outside code.bin")
+        records.append((offset, replacement))
+
+
+def ips_segments(data, code_bin):
+    patched = bytearray(code_bin)
+    for offset, replacement in parse_ips(data, len(code_bin)):
+        patched[offset:offset + len(replacement)] = replacement
+
+    segments = []
+    at = 0
+    while at < len(code_bin):
+        if patched[at] == code_bin[at]:
+            at += 1
+            continue
+        start = at
+        while at < len(code_bin) and patched[at] != code_bin[at]:
+            at += 1
+        segments.append((BASE + start, bytes(patched[start:at])))
+    if not segments:
+        raise SeaError("IPS patch does not change this code.bin")
+    return segments
+
+
 def pattern_text(pattern, mask):
     return " ".join(f"{p:02X}" if m == 0xFF else "??" for p, m in zip(pattern, mask))
 
 
 def describe(data, code=None, cros=()):
     segments, notes = read_elf(data)
+    version = parse_sea_version(notes)
     features = parse_features(notes, require_known=False)
-    lines = [f"SEA {SEA_VERSION}",
+    lines = [f"SEA {version}",
              "features: " + (", ".join("CRO targets" if f == FEATURE_CRO_TARGETS else str(f)
                                         for f in features) if features else "baseline"),
              f"{len(data)} bytes, {len(segments)} segments, "
@@ -807,6 +881,36 @@ def run_convert(args):
     return 3 if failed else 0
 
 
+def run_ips(args):
+    data = read_file(args.input, "IPS patch")
+    code_bin = read_file(args.code, "code.bin")
+    out = args.output or os.path.splitext(args.input)[0] + ".sea"
+    if os.path.abspath(out) == os.path.abspath(args.input):
+        raise SeaError("the output would overwrite the input; pass -o")
+
+    # An IPS carries bytes, not ARM relocation intent. Preserve every word exactly.
+    sea = build_plugin(ips_segments(data, code_bin), code_bin, branch_fixups=False)
+    with open(out, "wb") as f:
+        f.write(sea)
+    segments, notes = read_elf(sea)
+    sigs, _, _ = parse_locators(notes, len(segments))
+    print(f"wrote {out}: SEA {SEA_VERSION}, {len(segments)} segments, {len(sigs)} signatures, "
+          f"0 fix-ups, {len(sea)} bytes")
+
+    failed = 0
+    for path in args.also:
+        other = read_file(path, "code.bin")
+        try:
+            _, placed = resolve(sea, other)
+        except SeaError as e:
+            print(f"warning: does not resolve in {path}: {e}", file=sys.stderr)
+            failed += 1
+            continue
+        moved = sorted({addr - vaddr for addr, _, vaddr in placed})
+        print(f"resolves in {path}: segments moved by {', '.join(f'{m:+#x}' for m in moved)}")
+    return 3 if failed else 0
+
+
 def run_info(args):
     code = read_file(args.code, "code.bin") if args.code else None
     cros = [parse_cro_arg(spec) for spec in args.cro]
@@ -822,8 +926,8 @@ def main(argv=None):
         epilog=LIMITS_EPILOG)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    p = commands.add_parser("convert", help="turn an ARM ELF into a SEA 1.1 plugin",
-                            description="Turn an ARM ELF into a SEA 1.1 plugin.", epilog=LIMITS_EPILOG)
+    p = commands.add_parser("convert", help="turn an ARM ELF into a SEA 1.2 plugin",
+                            description="Turn an ARM ELF into a SEA 1.2 plugin.", epilog=LIMITS_EPILOG)
     p.add_argument("input", help="the ELF (or older .sea) to convert")
     p.add_argument("-o", "--output", help="where to write the .sea (default: input name with .sea)")
     p.add_argument("--code", metavar="CODE_BIN", required=True,
@@ -837,6 +941,17 @@ def main(argv=None):
     p.add_argument("--no-branch-fixups", action="store_true",
                    help="leave B/BL instructions as they are instead of re-aiming them at load")
     p.set_defaults(run=run_convert)
+
+    p = commands.add_parser("ips", help="turn a standalone IPS patch into a SEA 1.2 plugin",
+                            description="Turn an IPS patch for one clean code.bin into a SEA 1.2 plugin.",
+                            epilog="IPS imports preserve bytes exactly; use convert for ARM branch fix-ups.")
+    p.add_argument("input", help="the standalone IPS patch")
+    p.add_argument("-o", "--output", help="where to write the .sea (default: input name with .sea)")
+    p.add_argument("--code", metavar="CODE_BIN", required=True,
+                   help="the clean decompressed code.bin the IPS was made for")
+    p.add_argument("--also", metavar="CODE_BIN", action="append", default=[],
+                   help="another code.bin the resulting SEA should also resolve in")
+    p.set_defaults(run=run_ips)
 
     p = commands.add_parser("info", help="show what a .sea or plugin ELF contains",
                             description="Show what a .sea or plugin ELF contains.")

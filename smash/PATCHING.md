@@ -1,6 +1,6 @@
 ### Smash dt/ls SD Redirect v2.0
 
-These edits redirect the romfs:/dt and romfs:/ls files to load straight from the SD card, allowing for modifications and additions of any file without the need to repack or alter existing archives. SD loaded files take first priority, with update files next followed by the original content. All addresses are found automatically based on the code.bin and the payloads adjusted accordingly. If you are creating a modified update CIA or HANS codebin you must make sure your code.bin is decompressed.
+These edits redirect the romfs:/dt and romfs:/ls files to load straight from the SD card, allowing for modifications and additions of any file without the need to repack or alter existing archives. SD loaded files take first priority, with update files next followed by the original content. All addresses are found automatically based on the code.bin and the payloads adjusted accordingly. If you are creating a modified update's codebin you must make sure your code.bin is decompressed.
 
 **Smash's SaltySD now ships as a Luma3DS plugin**
 
@@ -37,6 +37,16 @@ The saved index is rebuilt automatically after a SaltySD update, and whenever a 
 
 SALT Engine Patches (Smash 3DS)
 SaltySD v2 includes SALT Engine patches, which lets any mod developer overwrite code in the main game binary as well as CRO extensions.
+
+If you already distribute a standalone `code.ips`, use the IPS importer tool included in this repo to generate a SALT Engine patch.
+
+```
+python sdk/saltysd_sea.py ips old_patch.ips --code code.bin -o old_patch.sea
+```
+
+The importer preserves IPS bytes exactly and will not re-aim branches. See
+`sdk/README.md` for region checks and the ELF workflow for movable ARM hooks.
+
 Each address you want to overwrite gets its own section, and a linker script places each section at the address it replaces in your supplied code.bin. Find those addresses with a disassembler with code.bin loaded at 0x00100000.
 
 1. Assembly: one section per patch site.
@@ -72,7 +82,7 @@ SECTIONS
 3. Build and convert (devkitARM):
 arm-none-eabi-as -march=armv6k -o patch.o patch.s
 arm-none-eabi-ld -T patch.ld -o patch.elf patch.o
-python saltysd_sea.py convert patch.elf --code code.bin --also eur_code.bin --also jpn_code.bin
+python sdk/saltysd_sea.py convert patch.elf --code code.bin --also eur_code.bin --also jpn_code.bin
 
 For this example, convert reports 2 segments, 3 signatures and 2 branch fix-ups (hook → cave, cave → game function). It also resolves in EUR and JPN.
 
