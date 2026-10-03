@@ -38,21 +38,9 @@ ifeq ($(UPDATE_TEST),1)
 CFLAGS  += -DSALTYSD_UPDATE_TEST
 TARGET  := saltysd-TEST
 endif
-ifneq ($(VERSION),)
-ifeq ($(shell echo "$(VERSION)" | grep -E "^[0-9]+\.[0-9]+\.[0-9]+$$"),)
-$(error VERSION must look like X.Y.Z)
-endif
-endif
-COMMIT  := $(shell git describe --always --dirty --abbrev=7)
-# git describe names a commit, not a build: every build off one dirty tree
-# shares that name, and the updater reads a shared name as "already running it".
-# DIRTY_ID names the build, and the publish script computes one for all regions.
-ifneq ($(DIRTY_ID),)
-ifeq ($(shell echo "$(DIRTY_ID)" | grep -E "^[0-9a-z]{7}(-[0-9a-f]{8})?-[0-9]{6}-[0-9]{4}$$"),)
-$(error DIRTY_ID must look like <commit7>[-<src8>]-YYMMDD-HHMM)
-endif
-COMMIT := $(DIRTY_ID)
-endif
+# SaltySD v2 is a release build, not a source-control snapshot.  Keeping its
+# identity here lets a source archive build exactly like a Git checkout.
+VERSION := 2.0.0
 ifneq ($(BUILT_AT),)
 ifeq ($(shell echo "$(BUILT_AT)" | grep -E "^[0-9]{14}$$"),)
 $(error BUILT_AT must be 14 digits, YYYYMMDDHHMMSS)
@@ -61,11 +49,7 @@ endif
 # A bare make is a local build: it claims no build time, so it takes anything.
 BUILT_AT ?= 00000000000000
 
-ifneq ($(VERSION),)
 IDENTITY := $(VERSION)
-else
-IDENTITY := $(COMMIT)
-endif
 LDFLAGS := $(ARCH) -T 3gx.ld -nostdlib -nostartfiles \
            -Wl,--gc-sections,--strip-discarded,-Map,$(BUILD)/$(TARGET).map
 
@@ -105,12 +89,7 @@ $(BUILD)/legacy.h: $(CODEBIN) ../tools/gen_legacy.py $(wildcard ../legacy/*.ips)
 $(BUILD)/main.o: $(BUILD)/patches.h $(BUILD)/legacy.h
 
 $(BUILD)/buildinfo.h: FORCE | $(BUILD)
-ifneq ($(VERSION),)
 	@echo '#define SALTYSD_VERSION "$(VERSION)"' > $@
-else
-	@test -n "$(COMMIT)" || { echo "no git commit to name this dirty build"; exit 1; }
-	@echo '#define SALTYSD_COMMIT "$(COMMIT)"' > $@
-endif
 	@echo '#define SALTYSD_BUILT_AT "$(BUILT_AT)"' >> $@
 
 $(BUILD)/resource_mod.o $(BUILD)/tetra_menu.o $(BUILD)/update.o: $(BUILD)/buildinfo.h

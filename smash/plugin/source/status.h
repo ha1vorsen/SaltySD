@@ -33,6 +33,9 @@ typedef struct {
     unsigned int plugins_refused;
     int plugins_result;
     unsigned int plugins_incompatible;
+    unsigned int plugins_cro_applied;
+    unsigned int plugins_cro_refused;
+    int plugins_cro_result;
 } saltysd_status_t;
 
 extern volatile saltysd_status_t saltysd_status;
