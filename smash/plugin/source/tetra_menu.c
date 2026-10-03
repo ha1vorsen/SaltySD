@@ -756,6 +756,7 @@ static void paint_bottom(u8 *fb, const screen *s, const menu *m)
         draw_text(fb, s, 8, 68, m->status, TEXT_RGB);
     if (m->status2)
         draw_text(fb, s, 8, 80, m->status2, TEXT_RGB);
+    draw_text(fb, s, 8, SCREEN_HEIGHT - GLYPH - 8, SALTYSD_IDENTITY, DIM_RGB);
 }
 
 static int draw(const menu *m)
@@ -816,7 +817,6 @@ static void make_title(void)
 {
     text_buffer line_text = { title_buf, 0 };
     put_str(&line_text, "Tetra Menu ");
-    put_str(&line_text, SALTYSD_IDENTITY);
 #ifdef SALTYSD_UPDATE_TEST
     put_str(&line_text, "  TEST BUILD");
 #endif
