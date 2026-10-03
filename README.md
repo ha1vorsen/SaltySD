@@ -12,4 +12,4 @@ Files are redirected into their own directory under sdmc:/saltysd/ based on the 
 
 **Building**
 
-Build from a source archive or a Git checkout, then run make in the game directory of your choosing with a supplied code.bin in the same directory. Smash's SaltySD v2 build does not require Git metadata.
+Run make in the game directory of your choosing with a supplied Smash Bros. 3DS code.bin in the same directory.
