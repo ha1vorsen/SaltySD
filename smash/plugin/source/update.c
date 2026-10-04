@@ -24,7 +24,6 @@
 #define PLUGIN_MAX   0x100000
 #define COPY_CHUNK   0x1000
 #define HTTP_NOT_FOUND 404
-#define PATH_REJECTED  ((int)0xE0000002)
 
 static char manifest[MANIFEST_MAX + 1];
 static u8 signature[SIG_SIZE + 1];
@@ -419,39 +418,6 @@ static u16 path_new[PLUGIN_PATH_MAX + 4];
 static u16 path_bak[PLUGIN_PATH_MAX + 4];
 static u8 copy_buf[COPY_CHUNK];
 
-static int starts_with(const char *s, const char *prefix)
-{
-    while (*prefix)
-        if (*s++ != *prefix++)
-            return 0;
-    return 1;
-}
-
-static int path_ok(const char *p)
-{
-    u32 n = 0;
-    while (p[n]) {
-        if (p[n] < 0x20 || p[n] > 0x7E)
-            return 0;
-        n++;
-    }
-    if (n < 5 || n > 200 || !starts_with(p, "/luma/plugins/") || !starts_with(p + n - 4, ".3gx"))
-        return 0;
-
-    const char *rest = p + 14;
-    if (starts_with(rest, "default.3gx") && !rest[11])
-        return 1;
-    for (u32 i = 0; i < 16; i++)
-        if (hex_digit(rest[i]) < 0)
-            return 0;
-    if (rest[16] != '/')
-        return 0;
-    for (const char *q = rest + 17; *q; q++)
-        if (*q == '/')
-            return 0;
-    return rest[17] != 0;
-}
-
 static void with_suffix(u16 *out, const u16 *path, const char *suffix)
 {
     u32 n = 0;
@@ -531,8 +497,8 @@ static int resolve_paths(void)
     int res = plgldr_plugin_path(plugin_path);
     if (res < 0)
         return res;
-    if (!path_ok(plugin_path))
-        return PATH_REJECTED;
+    if (!plgldr_plugin_path_valid(plugin_path))
+        return PLGLDR_PATH_REJECTED;
     fs_path_from_ascii(path_now, PLUGIN_PATH_MAX, plugin_path);
     with_suffix(path_new, path_now, ".new");
     with_suffix(path_bak, path_now, ".bak");
@@ -604,7 +570,7 @@ u32 update_gate(update_check *out)
 static int install(const update_check *check, update_install_result *out, update_progress progress, void *ctx)
 {
     int res = resolve_paths();
-    if (res == PATH_REJECTED)
+    if (res == PLGLDR_PATH_REJECTED)
         return fail(out, INSTALL_ODD_PATH, 0);
     if (res < 0)
         return fail(out, INSTALL_NO_PATH, res);

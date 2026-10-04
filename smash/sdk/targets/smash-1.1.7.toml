@@ -1,0 +1,80 @@
+registry_revision = 1
+
+[[builds]]
+id = 0x01170001
+title_id = 0x000EDF00
+game_version = "1.1"
+region = "usa"
+code_sha256 = "79349A846555B902BB131BF7E29F592E4845B807E33A26D42A2DCF2C39470922"
+
+[[targets]]
+id = 0x00010000
+name = "smash.fighter.animcmd.hittest.handler_site"
+build = 0x01170001
+address = 0x00A2B800
+span = 0x15C
+kind = "patch_site"
+mode = "arm"
+expected = "09 00 A0 E1 08 8B BD EC F0 8F BD E8"
+signature = "09 00 A0 E1 08 8B BD EC F0 8F BD E8"
+mask = "FF FF FF FF FF FF FF FF FF FF FF FF"
+
+[[targets]]
+id = 0x00010001
+name = "smash.fighter.animcmd.hittest.remove_all_slot"
+build = 0x01170001
+address = 0x00C2D214
+span = 4
+kind = "pointer_slot"
+mode = "data"
+expected = "10 56 6F 00"
+signature = "10 56 6F 00"
+mask = "FF FF FF FF"
+
+[[targets]]
+id = 0x00010002
+name = "smash.fighter.animcmd.hittest.hitbox_slot"
+build = 0x01170001
+address = 0x00C2D26C
+span = 4
+kind = "pointer_slot"
+mode = "data"
+expected = "C8 53 70 00"
+signature = "C8 53 70 00"
+mask = "FF FF FF FF"
+
+[[targets]]
+id = 0x00010003
+name = "smash.fighter.animcmd.hittest.extended_slot"
+build = 0x01170001
+address = 0x00C2D278
+span = 4
+kind = "pointer_slot"
+mode = "data"
+expected = "E8 86 6F 00"
+signature = "E8 86 6F 00"
+mask = "FF FF FF FF"
+
+[[targets]]
+id = 0x00010004
+name = "smash.fighter.animcmd.hittest.special_slot"
+build = 0x01170001
+address = 0x00C2D280
+span = 4
+kind = "pointer_slot"
+mode = "data"
+expected = "CC 69 70 00"
+signature = "CC 69 70 00"
+mask = "FF FF FF FF"
+
+[[targets]]
+id = 0x00010005
+name = "smash.fighter.animcmd.hittest.extended_special_slot"
+build = 0x01170001
+address = 0x00C2D288
+span = 4
+kind = "pointer_slot"
+mode = "data"
+expected = "F4 C3 6F 00"
+signature = "F4 C3 6F 00"
+mask = "FF FF FF FF"

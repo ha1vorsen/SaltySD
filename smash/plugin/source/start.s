@@ -15,6 +15,7 @@ _start:
     b       saltysd_build_named_path
     b       saltysd_cro_loaded
     b       saltysd_menu_hook
+    b       se_get_host
 
 plugin_start:
     push    {r0-r12, lr}

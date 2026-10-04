@@ -50,6 +50,8 @@ ISLAND_OFFS = 0x3C4
 ISLAND_SIZE = 0x400
 ISLAND_SDBGM = 0x1E0
 ISLAND_HOOKS = 0x220
+ISLAND_HOME = 0x360
+ISLAND_HOME_GATE = 0x3FC
 BASE = 0x100000
 
 def armips_value(name):
@@ -76,6 +78,7 @@ rf_hook = readbytes("build/bin/hookresource.bin")
 thread_hook = readbytes("build/bin/hookthread.bin")
 norm_hook = readbytes("build/bin/hooknorm.bin")
 sdbgm = readbytes("build/bin/island_sdbgm.bin")
+home = readbytes("build/bin/island_home.bin")
 
 bgm_str_addr = f.find(bgm_sig)
 bgm_hook_addr = bgm_str_addr + bgm_hook_offs
@@ -93,9 +96,23 @@ if menu_hook_word != 0xE5902040:
 
 sdbgm_addr = island_base() + ISLAND_SDBGM
 menu_tramp_addr = island_base() + ISLAND_HOOKS + 0xC
+home_addr = island_base() + ISLAND_HOME
+home_gate_addr = island_base() + ISLAND_HOME_GATE
 
 if ISLAND_SDBGM + len(sdbgm) > ISLAND_HOOKS:
     raise RuntimeError("The BGM payload does not fit in the island.")
+if ISLAND_HOME + len(home) > ISLAND_HOME_GATE:
+    raise RuntimeError("The HOME relay does not fit in the island.")
+
+def replace_word(blob, marker, value, label, count=1):
+    needle = struct.pack('<I', marker)
+    if blob.count(needle) != count:
+        raise RuntimeError("HOME relay has an unexpected %s marker count" % label)
+    return blob.replace(needle, struct.pack('<I', value))
+
+home = replace_word(home, 0x11111111, home_gate_addr + BASE, "gate")
+home = replace_word(home, 0x22222222, norm_hook_addr + BASE + 0xC, "normal continuation")
+home = replace_word(home, 0x33333333, norm_hook_addr + BASE + 0x1C, "normal skip continuation")
 
 # Just convert f to bytes now that we're done searching things.
 try:
@@ -109,7 +126,7 @@ f = insertreplace(f,rf_alloc,rf_alloc_addr)
 #f = insertreplace(f,ls_hook,ls_hook_addr)
 #f = insertreplace(f,ls_alloc,ls_alloc_addr)
 f = insertreplace(f,thread_hook,thread_hook_addr)
-f = insertreplace(f,norm_hook,norm_hook_addr)
+f = insertreplace(f,arm_b(norm_hook_addr, home_addr),norm_hook_addr)
 
 f = insertreplace(f, arm_b(menu_hook_site_addr, menu_tramp_addr),
                   menu_hook_site_addr)
@@ -122,6 +139,8 @@ if r32(f, norm_hook_addr-0x58+3) & 0xFF != 0x9A:
 f = insertreplace(f,b2str([0xEA]),norm_hook_addr-0x58+3)
 
 f = insertreplace(f,sdbgm,sdbgm_addr)
+f = insertreplace(f,home,home_addr)
+f = insertreplace(f,struct.pack('<I', 0),home_gate_addr)
 
 def words_match(addr, words):
     return all(r32(f, addr + i*4) == word for i, word in enumerate(words))

@@ -329,4 +329,5 @@ void plugins_cro_loaded(u32 base)
         __asm__ volatile ("svc 0x92" ::: "r0", "r1", "r2", "r3", "r12", "memory");
         __asm__ volatile ("svc 0x94" ::: "r0", "r1", "r2", "r3", "r12", "memory");
     }
+    plugins_lifecycle_cro_loaded((const char *)name_addr, base);
 }

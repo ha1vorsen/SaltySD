@@ -1,0 +1,13 @@
+[[segments]]
+name = "init"
+section = ".se_init"
+target = "smash.fighter.animcmd.hittest.handler_site"
+offset = 0
+max_size = 0x100
+
+[[segments]]
+name = "handler"
+section = ".no_hitboxes"
+target = "smash.fighter.animcmd.hittest.handler_site"
+offset = 0x100
+max_size = 0x5c

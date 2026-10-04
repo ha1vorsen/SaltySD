@@ -30,6 +30,7 @@ typedef struct {
     unsigned int legacy;
     unsigned int plugins_listed;
     unsigned int plugins_applied;
+    unsigned int plugins_pending;
     unsigned int plugins_refused;
     int plugins_result;
     unsigned int plugins_incompatible;

@@ -1,0 +1,3 @@
+-r requirements.lock
+hypothesis==6.155.6
+sortedcontainers==2.4.0

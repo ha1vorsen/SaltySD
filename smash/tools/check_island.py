@@ -2,6 +2,7 @@
 
 
 import sys
+import struct
 
 from arm_stack import read_armips_equ, read_armips_symbols
 
@@ -13,6 +14,8 @@ ISLAND_OFFS = 0x3C4
 ISLAND_SIZE = 0x400
 ISLAND_SDBGM = 0x1E0
 ISLAND_HOOKS = 0x220
+ISLAND_HOME = 0x360
+ISLAND_HOME_GATE = 0x3FC
 
 
 def island_bounds():
@@ -33,6 +36,7 @@ def main():
     pristine = open(sys.argv[1], "rb").read()
     patched = open(sys.argv[2], "rb").read()
     sdbgm = open("build/bin/island_sdbgm.bin", "rb").read()
+    home = open("build/bin/island_home.bin", "rb").read()
 
     island, hook_end = island_bounds()
     at = island + ISLAND_SDBGM - BASE
@@ -58,6 +62,30 @@ def main():
     if end > ISLAND_SIZE:
         raise SystemExit("the island is full.")
 
+    if ISLAND_HOME + len(home) > ISLAND_HOME_GATE:
+        raise SystemExit("the HOME relay overlaps its resident gate word.")
+    normal = bytes([0x05, 0x20, 0xA0, 0xE1, 0x07, 0x10, 0xA0, 0xE1,
+                    0x06, 0x00, 0xA0, 0xE1, 0x03, 0x00, 0x00, 0x9A])
+    normal_site = pristine.find(normal)
+    if normal_site < 0:
+        raise SystemExit("normal loader signature missing while checking HOME relay")
+    def fill(marker, value):
+        nonlocal home
+        needle = struct.pack("<I", marker)
+        if home.count(needle) != 1:
+            raise SystemExit("HOME relay marker is malformed")
+        home = home.replace(needle, struct.pack("<I", value))
+    fill(0x11111111, island + ISLAND_HOME_GATE)
+    fill(0x22222222, BASE + normal_site + 0xC)
+    fill(0x33333333, BASE + normal_site + 0x1C)
+    at = island + ISLAND_HOME - BASE
+    if patched[at:at + len(home)] != home:
+        raise SystemExit("the HOME relay is not intact in the island.")
+    gate_at = island + ISLAND_HOME_GATE - BASE
+    if patched[gate_at:gate_at + 4] != b"\0\0\0\0":
+        raise SystemExit("the HOME relay gate is not initialized to zero.")
+
+    end = max(end, ISLAND_HOME_GATE + 4)
     lo = island + end - BASE
     hi = island + ISLAND_SIZE - BASE
     if pristine[lo:hi] != patched[lo:hi]:
@@ -70,7 +98,7 @@ def main():
             "belong in the plugin."
         )
 
-    print(f"island 0x{island:06X}: helpers + BGM payload + hook stubs ok, "
+    print(f"island 0x{island:06X}: helpers + BGM payload + hook stubs + HOME relay ok, "
           f"{ISLAND_SIZE - end} bytes spare; libpng untouched")
 
 

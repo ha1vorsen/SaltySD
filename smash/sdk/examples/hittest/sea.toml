@@ -1,0 +1,24 @@
+[package]
+id = "org.saltysd.hittest"
+display_name = "Hit-test display"
+author = "SALT Engine team"
+version = "2.0.0"
+abi_min = "1.0"
+abi_max = "1.0"
+capabilities = []
+
+[payload]
+elf = "build/hittest.elf"
+code = "../../../code.bin"
+output = "build/hittest.sea"
+
+[[builds]]
+id = 0x01170001
+title_id = 0x000EDF00
+game_version = "1.1"
+region = "usa"
+code = "../../../code.bin"
+variant = 1
+
+[[variants]]
+id = 1
