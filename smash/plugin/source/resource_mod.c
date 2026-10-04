@@ -9,6 +9,7 @@ typedef int bool;
 #include <stdarg.h>
 #include "common.h"
 #include "index.h"
+#include "boot_log.h"
 #include "version.h"
 
 #define SALTYSD_LOOSE_ROOT     "sd:/luma/titles/smash"
@@ -343,11 +344,17 @@ static u32 fnv1a(u32 hash, const void *data, u32 size)
     return hash;
 }
 
-//Boot log, timings and tree hash: diagnostics only, off in release builds.
-#if SALTYSD_BOOT_LOG
-#define SALTYSD_LOG_PATH       "sd:/saltysd/smash/saltysd.log"
 #define SALTYSD_LOG_SIZE       0x400
 #define BOOT_TICK(name)        u64 name = ticks()
+
+static int boot_log_enabled(void *ifile_handle, char *marker)
+{
+    IFile_Init(ifile_handle);
+    if (!IFile_Open(ifile_handle, marker, 1))
+        return 0;
+    IFile_Close(ifile_handle);
+    return 1;
+}
 
 static u64 ticks(void)
 {
@@ -401,7 +408,7 @@ static void log_phase(char *log, char *name, u64 t)
     log_str(log, " ticks)\n");
 }
 
-static void write_log(char *log, void *ifile_handle)
+static void write_log(char *log, void *ifile_handle, char *path)
 {
     u32 len = strlen(log);
     while (len < SALTYSD_LOG_SIZE - 1)
@@ -409,7 +416,7 @@ static void write_log(char *log, void *ifile_handle)
     log[len++] = '\n';
 
     IFile_Init(ifile_handle);
-    if (!IFile_Open(ifile_handle, SALTYSD_LOG_PATH, SALTYSD_OPEN_WRITE | SALTYSD_OPEN_CREATE))
+    if (!IFile_Open(ifile_handle, path, SALTYSD_OPEN_WRITE | SALTYSD_OPEN_CREATE))
         return;
 
     u32 stream = *(u32 *)(ifile_handle + 4) + SALTYSD_FILE_STREAM;
@@ -442,9 +449,6 @@ static u32 tree_hash(rf_header *header, void *entries, void *strings, u8 *root_t
     }
     return hash;
 }
-#else
-#define BOOT_TICK(name)        ((void)0)
-#endif
 
 typedef struct {
     bool on;
@@ -1248,6 +1252,9 @@ void _main(rf_header *header, void *contents)
     int revoke_count = 0;
     crit_init(crit_this());
     mount_sdmc("sd:");
+    boot_log_paths log_paths;
+    int log_enabled = boot_log_paths_resolve(&log_paths) >= 0 &&
+                      boot_log_enabled(ifile_handle, log_paths.marker);
 
     u32 num_roots = 0;
     saltysd_root *roots = malloc(SALTYSD_MAX_ROOTS * sizeof(saltysd_root));
@@ -1356,47 +1363,44 @@ void _main(rf_header *header, void *contents)
 
             if (idx_usable((idx_header *)index, size, &key, &tree) &&
                 idx_apply((idx_header *)index, &tree, roots, num_roots, &named, &num_named)) {
-#if SALTYSD_BOOT_LOG
                 u32 applied_entries = ((idx_header *)index)->num_inserts;
                 u32 applied_files = ((idx_header *)index)->num_overrides;
-#endif
                 trim_string_blocks(header, string_section_next, stock_blocks,
                                    idx_string_end((idx_header *)index));
                 free(index);
 
-#if SALTYSD_BOOT_LOG
-                BOOT_TICK(t_applied);
-                u32 hash = tree_hash(header, entries, string_section_next, root_table, named,
-                                     num_named);
-                BOOT_TICK(t_hash);
-
-                char *log = malloc(SALTYSD_LOG_SIZE);
-                if (log) {
-                    log[0] = 0;
-                    log_str(log, "SaltySD boot log 1\nindexed roots ");
-                    log_dec(log, num_roots);
-                    log_str(log, " named ");
-                    log_dec(log, num_named);
-                    log_str(log, "\nentries ");
-                    log_dec(log, entries_before);
-                    log_str(log, " -> ");
-                    log_dec(log, header->resourceentry_amt);
-                    log_str(log, " added ");
-                    log_dec(log, applied_entries);
-                    log_str(log, " overrides ");
-                    log_dec(log, applied_files);
-                    log_str(log, "\n");
-                    log_phase(log, "roots ", t_roots - t_start);
-                    log_phase(log, "index ", t_applied - t_roots);
-                    log_phase(log, "total ", t_applied - t_start);
-                    log_phase(log, "hash  ", t_hash - t_applied);
-                    log_str(log, "tree ");
-                    log_hex(log, hash);
-                    log_str(log, "\n");
-                    write_log(log, ifile_handle);
-                    free(log);
+                if (log_enabled) {
+                    BOOT_TICK(t_applied);
+                    u32 hash = tree_hash(header, entries, string_section_next, root_table, named,
+                                         num_named);
+                    BOOT_TICK(t_hash);
+                    char *log = malloc(SALTYSD_LOG_SIZE);
+                    if (log) {
+                        log[0] = 0;
+                        log_str(log, "SaltySD boot log 1\nindexed roots ");
+                        log_dec(log, num_roots);
+                        log_str(log, " named ");
+                        log_dec(log, num_named);
+                        log_str(log, "\nentries ");
+                        log_dec(log, entries_before);
+                        log_str(log, " -> ");
+                        log_dec(log, header->resourceentry_amt);
+                        log_str(log, " added ");
+                        log_dec(log, applied_entries);
+                        log_str(log, " overrides ");
+                        log_dec(log, applied_files);
+                        log_str(log, "\n");
+                        log_phase(log, "roots ", t_roots - t_start);
+                        log_phase(log, "index ", t_applied - t_roots);
+                        log_phase(log, "total ", t_applied - t_start);
+                        log_phase(log, "hash  ", t_hash - t_applied);
+                        log_str(log, "tree ");
+                        log_hex(log, hash);
+                        log_str(log, "\n");
+                        write_log(log, ifile_handle, log_paths.log);
+                        free(log);
+                    }
                 }
-#endif
 
                 saltysd_map *map = malloc(sizeof(saltysd_map));
                 map->magic = SALTYSD_MAGIC;
@@ -2090,16 +2094,15 @@ void _main(rf_header *header, void *contents)
     trim_string_blocks(header, string_section_next, stock_blocks, last_str_addr);
     BOOT_TICK(t_insert);
 
-#if SALTYSD_BOOT_LOG
-    u32 hash = tree_hash(header, entries, string_section_next, root_table, named, num_named);
-    BOOT_TICK(t_hash);
+    u32 hash = 0;
+    u64 t_hash = 0;
+    if (log_enabled) {
+        hash = tree_hash(header, entries, string_section_next, root_table, named, num_named);
+        t_hash = ticks();
+    }
 
-    u32 put =
-#endif
-        idx_write(&rec, &key, index_path, roots, num_roots, named, num_named, ifile_handle);
-#if SALTYSD_BOOT_LOG
+    u32 put = idx_write(&rec, &key, index_path, roots, num_roots, named, num_named, ifile_handle);
     bool indexed = rec.on;
-#endif
     free(rec.revokes);
     free(rec.overrides);
     free(rec.strings);
@@ -2107,56 +2110,57 @@ void _main(rf_header *header, void *contents)
     free(rec.inserts);
     free(rec.text);
 
-#if SALTYSD_BOOT_LOG
-    BOOT_TICK(t_index);
-
-    char *log = malloc(SALTYSD_LOG_SIZE);
-    log[0] = 0;
-    log_str(log, "SaltySD boot log 1\nroots ");
-    log_dec(log, num_roots);
-    log_str(log, " files ");
-    log_dec(log, num_files);
-    log_str(log, " named ");
-    log_dec(log, num_named);
-    log_str(log, " revoke ");
-    log_dec(log, revoke_count);
-    log_str(log, "\nentries ");
-    log_dec(log, entries_before);
-    log_str(log, " -> ");
-    log_dec(log, header->resourceentry_amt);
-    log_str(log, " added ");
-    log_dec(log, entries_added);
-    log_str(log, " dropped ");
-    log_dec(log, entries_skipped);
-    log_str(log, "\n");
-    log_phase(log, "roots ", t_roots - t_start);
-    log_phase(log, "walk  ", t_walk - t_roots);
-    log_phase(log, "prep  ", t_prep - t_walk);
-    log_phase(log, "sort  ", t_sort - t_prep);
-    log_phase(log, "match ", t_match - t_sort);
-    log_phase(log, "insert", t_insert - t_match);
-    log_phase(log, "total ", t_insert - t_start);
-    log_phase(log, "hash  ", t_hash - t_insert);
-    log_phase(log, "index ", t_index - t_hash);
-    log_str(log, "index ");
-    log_str(log, index_path);
-    log_str(log, " ");
-    if (!indexed)
-        log_str(log, "not recorded\n");
-    else if (put == SALTYSD_PUT_NO_OPEN)
-        log_str(log, "open failed\n");
-    else if (put == SALTYSD_PUT_NO_STREAM)
-        log_str(log, "no file object\n");
-    else {
-        log_dec(log, put);
-        log_str(log, " bytes written\n");
+    if (log_enabled) {
+        BOOT_TICK(t_index);
+        char *log = malloc(SALTYSD_LOG_SIZE);
+        if (log) {
+            log[0] = 0;
+            log_str(log, "SaltySD boot log 1\nroots ");
+            log_dec(log, num_roots);
+            log_str(log, " files ");
+            log_dec(log, num_files);
+            log_str(log, " named ");
+            log_dec(log, num_named);
+            log_str(log, " revoke ");
+            log_dec(log, revoke_count);
+            log_str(log, "\nentries ");
+            log_dec(log, entries_before);
+            log_str(log, " -> ");
+            log_dec(log, header->resourceentry_amt);
+            log_str(log, " added ");
+            log_dec(log, entries_added);
+            log_str(log, " dropped ");
+            log_dec(log, entries_skipped);
+            log_str(log, "\n");
+            log_phase(log, "roots ", t_roots - t_start);
+            log_phase(log, "walk  ", t_walk - t_roots);
+            log_phase(log, "prep  ", t_prep - t_walk);
+            log_phase(log, "sort  ", t_sort - t_prep);
+            log_phase(log, "match ", t_match - t_sort);
+            log_phase(log, "insert", t_insert - t_match);
+            log_phase(log, "total ", t_insert - t_start);
+            log_phase(log, "hash  ", t_hash - t_insert);
+            log_phase(log, "index ", t_index - t_hash);
+            log_str(log, "index ");
+            log_str(log, index_path);
+            log_str(log, " ");
+            if (!indexed)
+                log_str(log, "not recorded\n");
+            else if (put == SALTYSD_PUT_NO_OPEN)
+                log_str(log, "open failed\n");
+            else if (put == SALTYSD_PUT_NO_STREAM)
+                log_str(log, "no file object\n");
+            else {
+                log_dec(log, put);
+                log_str(log, " bytes written\n");
+            }
+            log_str(log, "tree ");
+            log_hex(log, hash);
+            log_str(log, "\n");
+            write_log(log, ifile_handle, log_paths.log);
+            free(log);
+        }
     }
-    log_str(log, "tree ");
-    log_hex(log, hash);
-    log_str(log, "\n");
-    write_log(log, ifile_handle);
-    free(log);
-#endif
 
     free(full_name);
     free(files);

@@ -3,6 +3,13 @@
 #include "fs.h"
 #include "status.h"
 #include "common.h"
+#include "se/claims.h"
+#include "se/diagnostics.h"
+#include "se/format.h"
+#include "se/host_internal.h"
+#include "se/plan.h"
+#include "se/targets_internal.h"
+#include "monocypher.h"
 
 #include "types.h"
 
@@ -54,17 +61,14 @@
 #define NOTE_FIXUPS       5
 #define NOTE_FEATURES     6
 #define NOTE_TARGETS      7
+#define NOTE_PACKAGE      SE_NOTE_PACKAGE
 #define FEATURE_CRO       1
 #define SEA_VERSION       0x00010002
+#define SEA2_VERSION      SE_PACKAGE_VERSION
 
 #define SIG_BYTES_MAX     64
 #define PLACEMENT_SIZE    8
 #define FIXUP_SIZE        20
-
-typedef struct {
-    u32 start;
-    u32 end;
-} claim;
 
 typedef struct {
     u32 phoff;
@@ -105,9 +109,33 @@ typedef struct {
     u32 len;
 } sea_target;
 
+typedef struct {
+    u8 digest[32];
+    u32 file_size;
+    u32 signature_count;
+    u32 matches[PLUGIN_SIGS_MAX];
+    u16 plan_index;
+    u8 sea2;
+    u8 pending;
+    se_variant_record_v2 variant;
+    u32 init_address;
+    u32 cro_loaded_address;
+    u8 initialized;
+} boot_package;
+
+typedef struct {
+    int planning;
+    u16 owner;
+    const u32 *matches;
+    u32 match_count;
+    se_plan *plan;
+} check_options;
+
 static toggle_entry entries[PLUGINS_MAX];
 static u8 cro_pending[PLUGINS_MAX];
 static u32 cro_pending_count;
+static boot_package boot_packages[PLUGINS_MAX];
+static se_plan boot_plan;
 toggle_list plugins = { PLUGINS_ROOT, entries, PLUGINS_MAX, 0, 0 };
 
 u8 plugins_image[PLUGIN_IMAGE_SIZE];
@@ -115,8 +143,8 @@ u8 plugins_image[PLUGIN_IMAGE_SIZE];
 static fs_entry batch[READ_BATCH];
 static u16 path[PATH_CHARS];
 
-static claim claims[CLAIMS_MAX];
-static u32 num_claims;
+static se_claim_range claim_storage[CLAIMS_MAX];
+static se_claims claims;
 
 static signature sigs[PLUGIN_SIGS_MAX];
 static u32 num_sigs;
@@ -170,20 +198,6 @@ static u16 lower(u16 c)
 static int overlaps(u32 start, u32 end, u32 other_start, u32 other_end)
 {
     return start < other_end && other_start < end;
-}
-
-static int taken(u32 start, u32 end)
-{
-    u32 island = cro_fighter_new_ADDR + ISLAND_OFFS;
-    if (overlaps(start, end, island, island + ISLAND_SIZE))
-        return 1;
-    for (u32 i = 0; i < num_reserved; i++)
-        if (overlaps(start, end, reserved[i].addr, reserved[i].addr + reserved[i].len))
-            return 1;
-    for (u32 i = 0; i < num_claims; i++)
-        if (overlaps(start, end, claims[i].start, claims[i].end))
-            return 1;
-    return 0;
 }
 
 static int in_file(u32 offset, u32 size, u32 file_len)
@@ -333,13 +347,16 @@ static int read_features(const u8 *f, u32 len, const elf_header *hdr, int *has_c
     return PLUGIN_OK;
 }
 
-/* SEA 1.1 files predate the version note. SEA 1.2 names its exact wire format. */
-static int read_version(const u8 *f, u32 len, const elf_header *hdr)
+/* absent version note: SEA 1.1 compatibility */
+static int read_version(const u8 *f, u32 len, const elf_header *hdr, u32 *version)
 {
     const u8 *desc;
     u32 desc_len;
     int found = find_note(f, len, hdr, NOTE_SEA_VERSION, &desc, &desc_len);
-    if (found < 0 || (found && (desc_len != 4 || rd32(desc) != SEA_VERSION)))
+    if (found < 0 || (found && desc_len != 4))
+        return PLUGIN_INCOMPATIBLE;
+    *version = found ? rd32(desc) : 0x00010001u;
+    if (*version != 0x00010001u && *version != SEA_VERSION && *version != SEA2_VERSION)
         return PLUGIN_INCOMPATIBLE;
     return PLUGIN_OK;
 }
@@ -538,6 +555,50 @@ static int apply_fixups(const u8 *desc, u32 len)
     return PLUGIN_OK;
 }
 
+static int apply_host_imports(const u8 *f, u32 len, const elf_header *elf, u32 version)
+{
+    if (version != SEA2_VERSION)
+        return PLUGIN_OK;
+    const u8 *desc;
+    u32 desc_len;
+    if (find_note(f, len, elf, NOTE_PACKAGE, &desc, &desc_len) <= 0)
+        return PLUGIN_INCOMPATIBLE;
+    se_package_view_v2 view;
+    int code = se_format_parse_v2(desc, desc_len, &view);
+    if (code)
+        return code;
+    const se_import_record_v2 *imports =
+        (const se_import_record_v2 *)(view.data + view.header.imports.offset);
+    for (u32 i = 0; i < view.header.imports.count; i++) {
+        const se_import_record_v2 *import = &imports[i];
+        if (import->segment >= num_segs || segs[import->segment].target)
+            return PLUGIN_BAD_FIXUP;
+        u32 address;
+        if (import->symbol_id == SE_HOST_IMPORT_GET_HOST)
+            address = (u32)se_get_host;
+        else
+            return PLUGIN_BAD_FIXUP;
+        if (import->kind == SE_IMPORT_ABS32) {
+            if ((import->offset & 3) ||
+                !in_file(import->offset, 4, segs[import->segment].size))
+                return PLUGIN_BAD_FIXUP;
+            wr32(segs[import->segment].data + import->offset, address);
+        } else if (import->kind == SE_IMPORT_ARM_VENEER) {
+            if ((import->offset & 3) ||
+                !in_file(import->offset, 12, segs[import->segment].size))
+                return PLUGIN_BAD_FIXUP;
+            u8 *veneer = segs[import->segment].data + import->offset;
+            if (rd32(veneer) != 0xE59FC000u || rd32(veneer + 4) != 0xE12FFF1Cu ||
+                rd32(veneer + 8) != 0)
+                return PLUGIN_BAD_FIXUP;
+            wr32(veneer + 8, address);
+        } else {
+            return PLUGIN_BAD_FIXUP;
+        }
+    }
+    return PLUGIN_OK;
+}
+
 static int matches_memory(u32 addr, const u8 *orig, u32 size)
 {
     const volatile u8 *at = (const volatile u8 *)addr;
@@ -683,7 +744,8 @@ static int retain_cro(const u8 *fix_desc, u32 fix_len, cro_plugin **out)
     return PLUGIN_OK;
 }
 
-static int check_file(u8 *f, u32 len, cro_plugin **retained)
+static int check_file(u8 *f, u32 len, cro_plugin **retained,
+                      const check_options *options)
 {
     *retained = 0;
     elf_header hdr;
@@ -691,9 +753,11 @@ static int check_file(u8 *f, u32 len, cro_plugin **retained)
     if (res)
         return res;
 
-    res = read_version(f, len, &hdr);
+    u32 version;
+    res = read_version(f, len, &hdr, &version);
     if (res)
         return res;
+    (void)version;
 
     int has_cro;
     res = read_features(f, len, &hdr, &has_cro);
@@ -724,9 +788,16 @@ static int check_file(u8 *f, u32 len, cro_plugin **retained)
     res = read_targets(f, len, &hdr, has_cro);
     if (res)
         return res;
-    res = locate();
-    if (res)
-        return res;
+    if (options->matches) {
+        if (options->match_count != num_sigs)
+            return PLUGIN_NO_SIGNATURE;
+        for (u32 i = 0; i < num_sigs; i++)
+            sigs[i].match = options->matches[i];
+    } else {
+        res = locate();
+        if (res)
+            return res;
+    }
     res = place(f, len, &hdr, place_desc, place_len);
     if (res)
         return res;
@@ -735,6 +806,10 @@ static int check_file(u8 *f, u32 len, cro_plugin **retained)
         if (res)
             return res;
     }
+
+    res = apply_host_imports(f, len, &hdr, version);
+    if (res)
+        return res;
 
     u32 used = 0;
     for (u32 i = 0; i < num_segs; i++) {
@@ -745,21 +820,39 @@ static int check_file(u8 *f, u32 len, cro_plugin **retained)
         used += size;
         if (segs[i].target)
             continue;
-        if (taken(addr, addr + size))
+        u32 island = cro_fighter_new_ADDR + ISLAND_OFFS;
+        if (overlaps(addr, addr + size, island, island + ISLAND_SIZE))
+            return PLUGIN_CONFLICT;
+        for (u32 r = 0; r < num_reserved; r++)
+            if (overlaps(addr, addr + size, reserved[r].addr,
+                         reserved[r].addr + reserved[r].len))
+                return PLUGIN_CONFLICT;
+        for (u32 earlier = 0; earlier < i; earlier++)
+            if (!segs[earlier].target &&
+                overlaps(addr, addr + size, segs[earlier].addr,
+                         segs[earlier].addr + segs[earlier].size))
+                return PLUGIN_CONFLICT;
+        if (!options->planning && se_claims_overlap(&claims, addr, addr + size))
             return PLUGIN_CONFLICT;
         if (!matches_memory(addr, segs[i].original, size))
             return PLUGIN_MISMATCH;
-
-        if (num_claims == CLAIMS_MAX)
-            return PLUGIN_FULL;
-        claims[num_claims].start = addr;
-        claims[num_claims].end = addr + size;
-        num_claims++;
     }
 
     if (used != orig_len)
         return PLUGIN_NO_ORIGINAL;
-    if (has_cro) {
+    for (u32 i = 0; i < num_segs; i++) {
+        if (segs[i].target)
+            continue;
+        if (options->planning) {
+            if (!se_plan_add_claim(options->plan, options->owner,
+                                   segs[i].addr, segs[i].addr + segs[i].size))
+                return PLUGIN_FULL;
+        } else if (!se_claims_add(&claims, segs[i].addr,
+                                  segs[i].addr + segs[i].size)) {
+            return PLUGIN_FULL;
+        }
+    }
+    if (has_cro && !options->planning) {
         res = retain_cro(fix_desc, fix_len, retained);
         if (res)
             return res;
@@ -852,70 +945,406 @@ static int read_folder(const toggle_entry *e, u32 *len)
     return PLUGIN_OK;
 }
 
-static int load_one(const toggle_entry *e, u32 index)
+static void make_legacy_id(char out[SE_PACKAGE_ID_CHARS], u32 index)
 {
-    u32 len = 0;
-    int code = read_folder(e, &len);
+    const char prefix[] = "legacy.pkg";
+    u32 at = 0;
+    while (prefix[at]) {
+        out[at] = prefix[at];
+        at++;
+    }
+    out[at++] = '0' + (index / 10) % 10;
+    out[at++] = '0' + index % 10;
+    out[at] = 0;
+}
+
+static u16 add_fallback_package(u32 index, int enabled)
+{
+    char id[SE_PACKAGE_ID_CHARS];
+    make_legacy_id(id, index);
+    se_version version = { 1, 1, 0 };
+    int added = se_plan_add_package(&boot_plan, id, version, (u16)index, enabled);
+    if (added < 0)
+        return SE_PLAN_NONE;
+    boot_packages[index].plan_index = (u16)added;
+    se_diagnostics_package((u16)added, id, id,
+                           enabled ? SE_PACKAGE_DISCOVERED : SE_PACKAGE_DISABLED);
+    return (u16)added;
+}
+
+static se_version plan_version(se_wire_version value)
+{
+    se_version result = { value.major, value.minor, value.patch };
+    return result;
+}
+
+static int add_v2_relations(se_package_view_v2 *view, u16 owner)
+{
+    const se_dependency_record_v2 *dependencies =
+        (const se_dependency_record_v2 *)(view->data + view->header.dependencies.offset);
+    for (u32 i = 0; i < view->header.dependencies.count; i++) {
+        const char *id = se_format_string_v2(view, dependencies[i].package_id);
+        if (!se_plan_add_dependency(&boot_plan, owner, id,
+                                    plan_version(dependencies[i].minimum),
+                                    plan_version(dependencies[i].maximum),
+                                    dependencies[i].flags & SE_RELATION_OPTIONAL))
+            return PLUGIN_FULL;
+    }
+    const se_conflict_record_v2 *conflicts =
+        (const se_conflict_record_v2 *)(view->data + view->header.conflicts.offset);
+    for (u32 i = 0; i < view->header.conflicts.count; i++)
+        if (!se_plan_add_conflict(&boot_plan, owner,
+                                  se_format_string_v2(view, conflicts[i].package_id)))
+            return PLUGIN_FULL;
+    const se_order_record_v2 *ordering =
+        (const se_order_record_v2 *)(view->data + view->header.ordering.offset);
+    for (u32 i = 0; i < view->header.ordering.count; i++) {
+        const char *id = se_format_string_v2(view, ordering[i].package_id);
+        int ok = ordering[i].kind == SE_ORDER_BEFORE ?
+            se_plan_add_before(&boot_plan, owner, id) :
+            se_plan_add_after(&boot_plan, owner, id);
+        if (!ok)
+            return PLUGIN_FULL;
+    }
+    return PLUGIN_OK;
+}
+
+static int catalog_file(u32 index, u8 *f, u32 len)
+{
+    elf_header elf;
+    int code = read_header(f, len, &elf);
+    u32 version = 0;
+    if (!code)
+        code = read_version(f, len, &elf, &version);
+    if (code || version != SEA2_VERSION) {
+        u16 package = add_fallback_package(index, 1);
+        if (package == SE_PLAN_NONE)
+            return PLUGIN_FULL;
+        if (code)
+            return code;
+        boot_packages[index].sea2 = 0;
+        return PLUGIN_OK;
+    }
+
+    const u8 *desc;
+    u32 desc_len;
+    int found = find_note(f, len, &elf, NOTE_PACKAGE, &desc, &desc_len);
+    se_package_view_v2 view;
+    if (found <= 0 || se_format_parse_v2(desc, desc_len, &view) != PLUGIN_OK) {
+        if (add_fallback_package(index, 1) == SE_PLAN_NONE)
+            return PLUGIN_FULL;
+        return PLUGIN_INCOMPATIBLE;
+    }
+
+    se_version package_version = plan_version(view.header.version);
+    int added = se_plan_add_package(&boot_plan, view.package_id, package_version,
+                                    (u16)index, 1);
+    if (added < 0)
+        return PLUGIN_FULL;
+    u16 owner = (u16)added;
+    boot_packages[index].plan_index = owner;
+    boot_packages[index].sea2 = 1;
+    se_diagnostics_package(owner, view.package_id, view.display_name, SE_PACKAGE_DISCOVERED);
+    if (boot_plan.packages[owner].state == SE_PACKAGE_REFUSED)
+        return boot_plan.packages[owner].error;
+
+    const se_host_v1 *host = se_get_host(SE_HOST_ABI_MAJOR);
+    code = se_format_check_host_v2(&view, &host->header);
+    if (code)
+        return code;
+    se_build_identity identity;
+    if (host->get_build_identity(&identity, sizeof(identity)) < 0)
+        return SE_ERROR_WRONG_BUILD;
+    se_build_selection_v2 selection;
+    code = se_format_select_build_v2(&view, &identity, &selection);
+    if (code)
+        return code;
+    boot_packages[index].variant = selection.variant;
+    return add_v2_relations(&view, owner);
+}
+
+static void file_identity(u8 digest[32], const u8 *data, u32 size)
+{
+    crypto_blake2b(digest, 32, data, size);
+}
+
+static int same_identity(const u8 left[32], const u8 right[32])
+{
+    for (u32 i = 0; i < 32; i++)
+        if (left[i] != right[i])
+            return 0;
+    return 1;
+}
+
+static se_diagnostic_phase phase_for_error(int code)
+{
+    if (code == SE_ERROR_WRONG_BUILD || code == SE_ERROR_ABI_UNSUPPORTED ||
+        code == SE_ERROR_CAPABILITY_UNSUPPORTED)
+        return SE_PHASE_BUILD;
+    if (code >= SE_ERROR_INVALID_ID && code <= SE_ERROR_EXPLICIT_CONFLICT)
+        return SE_PHASE_DEPENDENCY;
+    if (code == PLUGIN_SIG_NOT_FOUND || code == PLUGIN_SIG_AMBIGUOUS ||
+        code == PLUGIN_NO_SIGNATURE)
+        return SE_PHASE_SIGNATURE;
+    if (code == PLUGIN_CONFLICT || code == SE_ERROR_STATIC_COLLISION)
+        return SE_PHASE_CLAIM;
+    return SE_PHASE_PARSING;
+}
+
+static int plan_file(u32 index, u32 len)
+{
+    boot_package *package = &boot_packages[index];
+    package->file_size = len;
+    file_identity(package->digest, image, len);
+    int code = catalog_file(index, image, len);
     if (code)
         return code;
 
-    u32 mark = num_claims;
-    cro_plugin *retained;
-    code = check_file(image, len, &retained);
-    if (code == PLUGIN_NO_MEMORY) {
-        cro_pending[index] = 1;
-        cro_pending_count++;
-        return PLUGIN_OK;
-    }
+    u32 claim_mark = boot_plan.claim_count;
+    u32 hook_mark = se_host_hook_mark();
+    cro_plugin *ignored = 0;
+    check_options options = { 1, package->plan_index, 0, 0, &boot_plan };
+    code = check_file(image, len, &ignored, &options);
     if (code) {
-        num_claims = mark;
+        boot_plan.claim_count = claim_mark;
+        se_host_hook_restore(hook_mark);
         return code;
     }
+    if (package->sea2 &&
+        (package->variant.first_segment != 0 || package->variant.segment_count != num_segs ||
+         package->variant.first_signature != 0 ||
+         package->variant.signature_count != num_sigs)) {
+        boot_plan.claim_count = claim_mark;
+        se_host_hook_restore(hook_mark);
+        return PLUGIN_INCOMPATIBLE;
+    }
+    if (package->sea2 && package->variant.init_segment != SE_INDEX_NONE) {
+        u32 segment = package->variant.init_segment;
+        if (segment >= num_segs || segs[segment].target ||
+            package->variant.init_offset >= segs[segment].size) {
+            boot_plan.claim_count = claim_mark;
+            se_host_hook_restore(hook_mark);
+            return PLUGIN_BAD_SEGMENT;
+        }
+        package->init_address = segs[segment].addr + package->variant.init_offset;
+    }
+    if (package->sea2 && package->variant.cro_loaded_segment != SE_INDEX_NONE) {
+        u32 segment = package->variant.cro_loaded_segment;
+        if (segment >= num_segs || segs[segment].target ||
+            package->variant.cro_loaded_offset >= segs[segment].size) {
+            boot_plan.claim_count = claim_mark;
+            se_host_hook_restore(hook_mark);
+            return PLUGIN_BAD_SEGMENT;
+        }
+        package->cro_loaded_address =
+            segs[segment].addr + package->variant.cro_loaded_offset;
+    }
+    package->signature_count = num_sigs;
+    for (u32 i = 0; i < num_sigs; i++)
+        package->matches[i] = sigs[i].match;
 
+    if (package->sea2) {
+        elf_header elf;
+        const u8 *desc;
+        u32 desc_len;
+        if (read_header(image, len, &elf) ||
+            find_note(image, len, &elf, NOTE_PACKAGE, &desc, &desc_len) <= 0) {
+            boot_plan.claim_count = claim_mark;
+            se_host_hook_restore(hook_mark);
+            return PLUGIN_INCOMPATIBLE;
+        }
+        se_package_view_v2 view;
+        if (se_format_parse_v2(desc, desc_len, &view) != PLUGIN_OK) {
+            boot_plan.claim_count = claim_mark;
+            se_host_hook_restore(hook_mark);
+            return PLUGIN_INCOMPATIBLE;
+        }
+        const se_hook_record_v2 *hooks =
+            (const se_hook_record_v2 *)(view.data + view.header.hooks.offset);
+        for (u32 i = 0; i < view.header.hooks.count; i++) {
+            const se_hook_record_v2 *hook = &hooks[i];
+            se_target target;
+            if (hook->flags != SE_HOOK_EXCLUSIVE || hook->handler_segment >= num_segs ||
+                segs[hook->handler_segment].target ||
+                hook->handler_offset >= segs[hook->handler_segment].size ||
+                se_targets_resolve(hook->target_id, &target) < 0 ||
+                (target.kind != SE_TARGET_POINTER_SLOT && target.kind != SE_TARGET_TABLE) ||
+                target.span != 4 || (target.address & 3)) {
+                boot_plan.claim_count = claim_mark;
+                se_host_hook_restore(hook_mark);
+                return SE_ERROR_HOOK_UNSUPPORTED;
+            }
+            u32 handler = segs[hook->handler_segment].addr + hook->handler_offset;
+            if ((handler & 3) ||
+                !se_plan_add_claim(&boot_plan, package->plan_index,
+                                   target.address, target.address + target.span) ||
+                se_host_allow_hook(package->plan_index + 1, hook->target_id,
+                                   handler, hook->flags) < 0) {
+                boot_plan.claim_count = claim_mark;
+                se_host_hook_restore(hook_mark);
+                return PLUGIN_FULL;
+            }
+        }
+    }
+    return PLUGIN_OK;
+}
+
+static int commit_file(u32 index)
+{
+    boot_package *package = &boot_packages[index];
+    u32 len = 0;
+    int code = read_folder(&plugins.entries[index], &len);
+    if (code)
+        return code;
+    u8 digest[32];
+    file_identity(digest, image, len);
+    if (len != package->file_size || !same_identity(digest, package->digest))
+        return SE_ERROR_FILE_CHANGED;
+
+    u32 mark = se_claims_mark(&claims);
+    cro_plugin *retained = 0;
+    check_options options = { 0, package->plan_index, package->matches,
+                              package->signature_count, &boot_plan };
+    code = check_file(image, len, &retained, &options);
+    if (code) {
+        se_claims_restore(&claims, mark);
+        return code;
+    }
     write_file();
     if (retained)
         plugins_cro_register(retained);
     return PLUGIN_OK;
 }
 
+static int package_id_equal(const char *left, const char *right)
+{
+    while (*left && *left == *right) {
+        left++;
+        right++;
+    }
+    return *left == *right;
+}
+
+static int find_plan_package(const char *id)
+{
+    for (u32 i = 0; i < boot_plan.package_count; i++)
+        if (package_id_equal(boot_plan.packages[i].id, id))
+            return (int)i;
+    return -1;
+}
+
+static int dependencies_committed(u16 package)
+{
+    for (u32 i = 0; i < boot_plan.dependency_count; i++) {
+        const se_plan_dependency *dependency = &boot_plan.dependencies[i];
+        if (dependency->owner != package || dependency->optional)
+            continue;
+        int target = find_plan_package(dependency->target);
+        if (target < 0 || boot_plan.packages[target].state == SE_PACKAGE_REFUSED)
+            return -1;
+        if (boot_plan.packages[target].state != SE_PACKAGE_APPLIED &&
+            boot_plan.packages[target].state != SE_PACKAGE_ACTIVE)
+            return 0;
+    }
+    return 1;
+}
+
+static void maintain_caches(void)
+{
+    __asm__ volatile ("svc 0x92" ::: "r0", "r1", "r2", "r3", "r12", "memory");
+    __asm__ volatile ("svc 0x94" ::: "r0", "r1", "r2", "r3", "r12", "memory");
+}
+
+static void initialize_ready(void)
+{
+    maintain_caches();
+    const se_host_v1 *host = se_get_host(SE_HOST_ABI_MAJOR);
+    for (u32 ordered = 0; ordered < boot_plan.order_count; ordered++) {
+        u16 package = boot_plan.order[ordered];
+        se_plan_package *planned = &boot_plan.packages[package];
+        u32 index = planned->discovery_index;
+        boot_package *record = &boot_packages[index];
+        if (!record->sea2 || record->initialized || planned->state != SE_PACKAGE_APPLIED)
+            continue;
+        int dependencies = dependencies_committed(package);
+        if (dependencies <= 0)
+            continue;
+        if (record->init_address) {
+            se_init_fn init = (se_init_fn)record->init_address;
+            int result = init(host, package + 1);
+            if (result) {
+                se_plan_refuse(&boot_plan, package, PLUGIN_INCOMPATIBLE, SE_PLAN_NONE);
+                se_plan_propagate_refusals(&boot_plan);
+                se_diagnostics_emit(package, SE_PHASE_INIT, PLUGIN_INCOMPATIBLE,
+                                    SE_PLAN_NONE, (u32)result, 0);
+                saltysd_status.plugins_result = result;
+                continue;
+            }
+        }
+        record->initialized = 1;
+        planned->state = SE_PACKAGE_ACTIVE;
+        se_diagnostics_state(package, SE_PACKAGE_ACTIVE);
+    }
+}
+
+static void refresh_status(void)
+{
+    saltysd_status.plugins_applied = 0;
+    saltysd_status.plugins_pending = 0;
+    saltysd_status.plugins_refused = 0;
+    saltysd_status.plugins_incompatible = 0;
+    for (u32 i = 0; i < boot_plan.package_count; i++) {
+        const se_plan_package *package = &boot_plan.packages[i];
+        if (package->state == SE_PACKAGE_APPLIED || package->state == SE_PACKAGE_ACTIVE)
+            saltysd_status.plugins_applied++;
+        else if (package->state == SE_PACKAGE_PENDING)
+            saltysd_status.plugins_pending++;
+        else if (package->state == SE_PACKAGE_REFUSED) {
+            saltysd_status.plugins_refused++;
+            if (package->error == PLUGIN_INCOMPATIBLE ||
+                package->error == SE_ERROR_ABI_UNSUPPORTED ||
+                package->error == SE_ERROR_CAPABILITY_UNSUPPORTED)
+                saltysd_status.plugins_incompatible++;
+        }
+    }
+}
+
 void plugins_cro_prepare(void)
 {
     if (!cro_pending_count)
         return;
-
-    int res = fs_open();
-    if (res < 0) {
-        saltysd_status.plugins_cro_result = res;
+    int result = fs_open();
+    if (result < 0) {
+        saltysd_status.plugins_cro_result = result;
         return;
     }
-
-    for (u32 i = 0; i < plugins.count; i++) {
-        if (!cro_pending[i])
+    for (u32 ordered = 0; ordered < boot_plan.order_count; ordered++) {
+        u16 package = boot_plan.order[ordered];
+        u32 i = boot_plan.packages[package].discovery_index;
+        if (!cro_pending[i] || dependencies_committed(package) <= 0)
             continue;
-
-        u32 len = 0;
-        int code = read_folder(&plugins.entries[i], &len);
-        cro_plugin *retained = 0;
-        if (!code)
-            code = check_file(image, len, &retained);
+        int code = commit_file(i);
         if (code == PLUGIN_NO_MEMORY) {
             saltysd_status.plugins_cro_result = code;
             continue;
         }
-
         cro_pending[i] = 0;
+        boot_packages[i].pending = 0;
         cro_pending_count--;
         if (code) {
+            se_plan_refuse(&boot_plan, package, (se_error)code, SE_PLAN_NONE);
+            se_plan_propagate_refusals(&boot_plan);
+            se_diagnostics_emit(package, SE_PHASE_COMMIT, (se_error)code,
+                                SE_PLAN_NONE, 0, 0);
             saltysd_status.plugins_cro_refused++;
             saltysd_status.plugins_cro_result = code;
-            continue;
+        } else {
+            boot_plan.packages[package].state = SE_PACKAGE_APPLIED;
+            se_diagnostics_state(package, SE_PACKAGE_APPLIED);
         }
-
-        write_file();
-        if (retained)
-            plugins_cro_register(retained);
     }
-
+    initialize_ready();
+    refresh_status();
     fs_close();
 }
 
@@ -924,33 +1353,113 @@ void plugins_load(const SaltPatch *table, u32 count, u32 code_end)
     reserved = table;
     num_reserved = count;
     image_end = code_end;
-    num_claims = 0;
-
-    int res = fs_open();
-    if (res < 0) {
-        saltysd_status.plugins_result = res;
-        return;
+    se_claims_init(&claims, claim_storage, CLAIMS_MAX);
+    se_plan_init(&boot_plan);
+    se_diagnostics_reset();
+    se_host_reset();
+    cro_pending_count = 0;
+    for (u32 i = 0; i < PLUGINS_MAX; i++) {
+        cro_pending[i] = 0;
+        boot_packages[i].pending = 0;
+        boot_packages[i].plan_index = SE_PLAN_NONE;
+        boot_packages[i].init_address = 0;
+        boot_packages[i].cro_loaded_address = 0;
+        boot_packages[i].initialized = 0;
     }
 
-    res = toggles_load(&plugins);
+    int result = fs_open();
+    if (result < 0) {
+        saltysd_status.plugins_result = result;
+        return;
+    }
+    result = toggles_load(&plugins);
     saltysd_status.plugins_listed = plugins.count;
-    if (res < 0)
-        saltysd_status.plugins_result = res;
+    if (result < 0)
+        saltysd_status.plugins_result = result;
 
     for (u32 i = 0; i < plugins.count; i++) {
-        if (!plugins.entries[i].enabled)
+        se_host_register_package(i + 1, plugins.entries[i].name);
+        if (!plugins.entries[i].enabled) {
+            if (add_fallback_package(i, 0) == SE_PLAN_NONE)
+                saltysd_status.plugins_result = PLUGIN_FULL;
             continue;
-
-        int code = load_one(&plugins.entries[i], i);
+        }
+        u32 len = 0;
+        int code = read_folder(&plugins.entries[i], &len);
+        if (!code)
+            code = plan_file(i, len);
+        if (boot_packages[i].plan_index == SE_PLAN_NONE)
+            add_fallback_package(i, 1);
         if (code) {
-            saltysd_status.plugins_refused++;
+            u16 package = boot_packages[i].plan_index;
+            se_plan_refuse(&boot_plan, package, (se_error)code, SE_PLAN_NONE);
+            se_diagnostics_emit(package, phase_for_error(code), (se_error)code,
+                                SE_PLAN_NONE, 0, 0);
             saltysd_status.plugins_result = code;
-            if (code == PLUGIN_INCOMPATIBLE)
-                saltysd_status.plugins_incompatible++;
-        } else {
-            saltysd_status.plugins_applied++;
         }
     }
 
+    se_plan_run(&boot_plan);
+    for (u32 i = 0; i < boot_plan.package_count; i++) {
+        if (boot_plan.packages[i].state == SE_PACKAGE_REFUSED &&
+            boot_plan.packages[i].error != PLUGIN_OK)
+            se_diagnostics_emit((u16)i, phase_for_error(boot_plan.packages[i].error),
+                                (se_error)boot_plan.packages[i].error,
+                                boot_plan.packages[i].peer, 0, 0);
+    }
+
+    for (u32 ordered = 0; ordered < boot_plan.order_count; ordered++) {
+        u16 package = boot_plan.order[ordered];
+        if (boot_plan.packages[package].state != SE_PACKAGE_PLANNED)
+            continue;
+        u32 index = boot_plan.packages[package].discovery_index;
+        int dependencies = dependencies_committed(package);
+        if (dependencies < 0) {
+            se_plan_refuse(&boot_plan, package, SE_ERROR_DEPENDENCY_REFUSED, SE_PLAN_NONE);
+            continue;
+        }
+        if (!dependencies) {
+            boot_plan.packages[package].state = SE_PACKAGE_PENDING;
+            boot_packages[index].pending = 1;
+            cro_pending[index] = 1;
+            cro_pending_count++;
+            se_diagnostics_state(package, SE_PACKAGE_PENDING);
+            continue;
+        }
+        int code = commit_file(index);
+        if (code == PLUGIN_NO_MEMORY) {
+            boot_plan.packages[package].state = SE_PACKAGE_PENDING;
+            boot_packages[index].pending = 1;
+            cro_pending[index] = 1;
+            cro_pending_count++;
+            se_diagnostics_state(package, SE_PACKAGE_PENDING);
+            continue;
+        }
+        if (code) {
+            se_plan_refuse(&boot_plan, package, (se_error)code, SE_PLAN_NONE);
+            se_plan_propagate_refusals(&boot_plan);
+            se_diagnostics_emit(package, SE_PHASE_COMMIT, (se_error)code,
+                                SE_PLAN_NONE, 0, 0);
+            saltysd_status.plugins_result = code;
+            continue;
+        }
+        boot_plan.packages[package].state = SE_PACKAGE_APPLIED;
+        se_diagnostics_state(package, SE_PACKAGE_APPLIED);
+    }
+    initialize_ready();
+    refresh_status();
     fs_close();
+}
+
+void plugins_lifecycle_cro_loaded(const char *name, u32 base)
+{
+    for (u32 ordered = 0; ordered < boot_plan.order_count; ordered++) {
+        u16 package = boot_plan.order[ordered];
+        se_plan_package *planned = &boot_plan.packages[package];
+        boot_package *record = &boot_packages[planned->discovery_index];
+        if (planned->state != SE_PACKAGE_ACTIVE || !record->cro_loaded_address)
+            continue;
+        se_cro_loaded_fn callback = (se_cro_loaded_fn)record->cro_loaded_address;
+        callback(package + 1, name, base);
+    }
 }

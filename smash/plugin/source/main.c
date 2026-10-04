@@ -3,6 +3,7 @@
 #include "types.h"
 #include "salt_patch.h"
 #include "plugins.h"
+#include "home_swap.h"
 
 typedef struct {
     u32       addr;
@@ -143,6 +144,7 @@ void plugin_main(void)
     if (saltysd_status.refused)
         return;
 
+    saltysd_home_swap_start();
     saltysd_status.verified = verify_all();
     saltysd_status.stage = 3;
 }

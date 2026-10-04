@@ -1,0 +1,6 @@
+/sdk/.deps/
+/sdk/.deps-staging/
+/.hypothesis/
+/sdk/.hypothesis/
+/hittest_sea/build/
+/sdk/examples/*/build/

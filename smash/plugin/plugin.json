@@ -7,7 +7,7 @@
   "memoryRegion": "2MiB",
   "compatibility": "both",
   "swapNotNeeded": false,
-  "eventsSelfManaged": true,
+  "eventsSelfManaged": false,
   "targets": [
     "0x000EDF00"
   ]

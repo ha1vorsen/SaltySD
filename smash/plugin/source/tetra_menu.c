@@ -1,4 +1,5 @@
 #include "common.h"
+#include "boot_log.h"
 #include "status.h"
 #include "draw.h"
 #include "display.h"
@@ -8,6 +9,8 @@
 #include "update.h"
 #include "version.h"
 #include "input.h"
+#include "se/diagnostics.h"
+#include "se/errors.h"
 
 #include "types.h"
 
@@ -37,12 +40,13 @@
 #define MOD_NAME_SHOWN       40
 
 enum { EXIT_NONE, EXIT_BACK, EXIT_HOME, EXIT_SLEEP, EXIT_CLOSE };
-enum { ITEM_MODS, ITEM_PLUGINS, ITEM_REBUILD, ITEM_STABLE, ITEM_DIRTY, ITEM_BACK, ITEM_COUNT };
+enum { ITEM_MODS, ITEM_PLUGINS, ITEM_LOG, ITEM_REBUILD, ITEM_STABLE, ITEM_DIRTY,
+       ITEM_BACK, ITEM_COUNT };
 enum { VIEW_MAIN, VIEW_MODS, VIEW_CONFIRM, VIEW_BUSY, VIEW_CODE, VIEW_OFFER,
        VIEW_INSTALL_CONFIRM, VIEW_REBUILD, VIEW_COUNT };
 
 static const char *const item_names[ITEM_COUNT] = {
-    "Mods", "Plugins / Engine", "Rebuild mod index", "Check for updates (stable)",
+    "Mods", "Plugins / Engine", "Boot logging", "Rebuild mod index", "Check for updates (stable)",
     "Check for updates (dirty)", "Back",
 };
 
@@ -69,6 +73,7 @@ typedef struct {
     u32 cursor;
     u32 mod_cursor;
     u32 mod_first;
+    int logging_enabled;
     char code[4];
     u32 code_pos;
     const char *status;
@@ -168,13 +173,23 @@ static void paint_main(u8 *fb, const screen *s, const menu *m)
     for (u32 i = 0; i < ITEM_COUNT; i++) {
         int on = i == m->cursor;
         draw_text(fb, s, 8, 32 + i * 12, on ? ">" : " ", CURSOR_RGB);
-        draw_text(fb, s, 24, 32 + i * 12, item_names[i], on ? CURSOR_RGB : TEXT_RGB);
+        if (i == ITEM_LOG) {
+            draw_text(fb, s, 24, 32 + i * 12,
+                      m->logging_enabled < 0 ? "Boot logging: Unavailable" :
+                      m->logging_enabled ? "Boot logging: On" : "Boot logging: Off",
+                      on ? CURSOR_RGB : TEXT_RGB);
+        } else {
+            draw_text(fb, s, 24, 32 + i * 12, item_names[i], on ? CURSOR_RGB : TEXT_RGB);
+        }
     }
 }
 
 static void paint_mods(u8 *fb, const screen *s, const menu *m)
 {
     const toggle_list *list = m->page->list;
+    u32 diagnostic_count = 0;
+    const se_package_diagnostic *diagnostics = m->page->is_mods ? 0 :
+        se_diagnostics_packages(&diagnostic_count);
     char line[TEXT_LINE_CAPACITY];
     text_buffer line_text = { line, 0 };
     put_str(&line_text, m->page->title);
@@ -212,7 +227,10 @@ static void paint_mods(u8 *fb, const screen *s, const menu *m)
         draw_text(fb, s, mod->wanted ? 40 : 32, y, mod->wanted ? "[On]" : "[Off]", rgb);
 
         line_text.len = 0;
-        put_name(&line_text, mod->name, MOD_NAME_SHOWN);
+        if (diagnostics && i < diagnostic_count && diagnostics[i].display_name[0])
+            put_str(&line_text, diagnostics[i].display_name);
+        else
+            put_name(&line_text, mod->name, MOD_NAME_SHOWN);
         draw_text(fb, s, 80, y, line, rgb);
     }
 }
@@ -252,6 +270,29 @@ static void hint_mods(u8 *fb, const screen *s, const menu *m)
 
     draw_text(fb, s, 8, 8, "Up/Down: Move  A: On/Off", DIM_RGB);
     draw_text(fb, s, 8, 20, "START: Apply  B: Back/Discard", DIM_RGB);
+    if (!m->page->is_mods) {
+        put_str(&line_text, "Active ");
+        put_dec(&line_text, saltysd_status.plugins_applied);
+        put_str(&line_text, "  Pending ");
+        put_dec(&line_text, saltysd_status.plugins_pending);
+        put_str(&line_text, "  Refused ");
+        put_dec(&line_text, saltysd_status.plugins_refused);
+        draw_text(fb, s, 8, 32, line, TEXT_RGB);
+
+        u32 count = 0;
+        const se_package_diagnostic *records = se_diagnostics_packages(&count);
+        if (m->mod_cursor < count) {
+            line_text.len = 0;
+            const se_package_diagnostic *record = &records[m->mod_cursor];
+            put_str(&line_text, record->display_name[0] ? record->display_name : record->id);
+            put_str(&line_text, ": ");
+            put_str(&line_text, se_error_text((se_error)record->error));
+            draw_text(fb, s, 8, 44, line,
+                      record->error == PLUGIN_OK ? TEXT_RGB : CURSOR_RGB);
+        }
+        draw_text(fb, s, 8, 56, "Changes take effect after restart.", DIM_RGB);
+        return;
+    }
     put_dec(&line_text, toggles_changes(m->page->list));
     put_str(&line_text, " Change(s) not applied");
     draw_text(fb, s, 8, 44, line, TEXT_RGB);
@@ -349,6 +390,35 @@ static void open_list(menu *m, const list_page *page)
         put_dec(&line_text, page->list->max);
         set_status(m, status_buf, 0);
     }
+}
+
+static void toggle_boot_log(menu *m)
+{
+    boot_log_paths paths;
+    int res = boot_log_paths_resolve(&paths);
+    if (res < 0) {
+        fs_failed(m, "Plugin path", res);
+        return;
+    }
+
+    res = fs_open();
+    if (res < 0) {
+        fs_failed(m, "SD access", res);
+        return;
+    }
+
+    u16 path[BOOT_LOG_PATH_MAX];
+    fs_path_from_ascii(path, sizeof(path) / sizeof(path[0]), paths.marker + 3);
+    int enabled = fs_file_exists(path) >= 0;
+    res = enabled ? fs_file_delete(path) : fs_file_create_empty(path);
+    fs_close();
+    if (res < 0) {
+        fs_failed(m, "Boot logging", res);
+        return;
+    }
+
+    m->logging_enabled = !enabled;
+    restart(m);
 }
 
 static void apply_mods(menu *m)
@@ -585,6 +655,9 @@ static u32 press_main(menu *m, u32 pressed)
         return EXIT_NONE;
     case ITEM_PLUGINS:
         open_list(m, &plugins_page);
+        return EXIT_NONE;
+    case ITEM_LOG:
+        toggle_boot_log(m);
         return EXIT_NONE;
     case ITEM_REBUILD:
         m->view = VIEW_REBUILD;
@@ -832,11 +905,21 @@ void tetra_menu_run(void)
     m.view = VIEW_MAIN;
     m.cursor = ITEM_MODS;
     m.mod_cursor = m.mod_first = 0;
+    m.logging_enabled = -1;
     m.code[0] = m.code[1] = m.code[2] = m.code[3] = '0';
     m.code_pos = 0;
     m.status = m.status2 = 0;
     if (!display_open(&m.output))
         return;
+    boot_log_paths paths;
+    if (boot_log_paths_resolve(&paths) >= 0) {
+        if (fs_open() >= 0) {
+            u16 path[BOOT_LOG_PATH_MAX];
+            fs_path_from_ascii(path, sizeof(path) / sizeof(path[0]), paths.marker + 3);
+            m.logging_enabled = fs_file_exists(path) >= 0;
+            fs_close();
+        }
+    }
     make_title();
 
     display_frame top, bottom;
