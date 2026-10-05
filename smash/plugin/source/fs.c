@@ -13,6 +13,50 @@
 
 static u32 fs_handle;
 static u64 sdmc;
+static volatile u32 session_lock;
+static u32 session_refs;
+
+static int session_try_lock(void)
+{
+    u32 held, failed = 1;
+    __asm__ volatile("ldrex %0, [%1]" : "=&r"(held) : "r"(&session_lock) : "memory");
+    if (!held) {
+        u32 one = 1;
+        __asm__ volatile("strex %0, %2, [%1]"
+                         : "=&r"(failed) : "r"(&session_lock), "r"(one) : "memory");
+    } else {
+        __asm__ volatile("clrex" ::: "memory");
+    }
+    return !failed;
+}
+
+static void session_acquire_lock(void)
+{
+    while (!session_try_lock())
+        ;
+}
+
+static void session_release_lock(void)
+{
+    u32 barrier = 0;
+    __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" :: "r"(barrier) : "memory");
+    session_lock = 0;
+}
+
+static void close_session(void)
+{
+    if (sdmc) {
+        u32 *cmd = ipc_cmdbuf();
+        cmd[0] = 0x080E0080;
+        cmd[1] = (u32)sdmc;
+        cmd[2] = (u32)(sdmc >> 32);
+        ipc_request(fs_handle);
+        sdmc = 0;
+    }
+    if (fs_handle)
+        ipc_close(fs_handle);
+    fs_handle = 0;
+}
 
 static u32 path_bytes(const u16 *path)
 {
@@ -24,9 +68,17 @@ static u32 path_bytes(const u16 *path)
 
 int fs_open(void)
 {
+    session_acquire_lock();
+    if (session_refs) {
+        session_refs++;
+        session_release_lock();
+        return 0;
+    }
+
     int res = ipc_service(&fs_handle, "fs:USER");
     if (res < 0) {
         fs_handle = 0;
+        session_release_lock();
         return res;
     }
 
@@ -50,23 +102,19 @@ int fs_open(void)
     }
 
     if (res < 0)
-        fs_close();
+        close_session();
+    else
+        session_refs = 1;
+    session_release_lock();
     return res;
 }
 
 void fs_close(void)
 {
-    if (sdmc) {
-        u32 *cmd = ipc_cmdbuf();
-        cmd[0] = 0x080E0080;
-        cmd[1] = (u32)sdmc;
-        cmd[2] = (u32)(sdmc >> 32);
-        ipc_request(fs_handle);
-        sdmc = 0;
-    }
-    if (fs_handle)
-        ipc_close(fs_handle);
-    fs_handle = 0;
+    session_acquire_lock();
+    if (session_refs && !--session_refs)
+        close_session();
+    session_release_lock();
 }
 
 int fs_dir_open(u32 *dir, const u16 *path)
