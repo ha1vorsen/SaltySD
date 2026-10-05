@@ -1832,9 +1832,12 @@ void _main(rf_header *header, void *contents)
         if (files[i] == NULL)
             continue;
 
-        //Check the file against our revoked list
-        if (revoked_files && find_string((u32 *)revoked_files, revoke_count, files[i]) >= 0)
+        // ownership remains with the scan until insertion
+        if (revoked_files && find_string((u32 *)revoked_files, revoke_count, files[i]) >= 0) {
+            free(files[i]);
+            files[i] = NULL;
             continue;
+        }
 
         printf("Adding file %s", files[i]);
 
@@ -2170,6 +2173,8 @@ void _main(rf_header *header, void *contents)
     free(dir_roots);
     free(file_sizes);
     free(file_roots);
+    free(revoked_files);
+    free(revoke_buf);
     saltysd_map *map = malloc(sizeof(saltysd_map));
     map->magic = SALTYSD_MAGIC;
     map->num_roots = num_roots;
