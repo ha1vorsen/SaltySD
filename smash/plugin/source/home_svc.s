@@ -9,7 +9,19 @@ get_thread_tls:
 .global saltysd_svc_create_thread
 .type saltysd_svc_create_thread, %function
 saltysd_svc_create_thread:
+    push    {r0, r4}
+    ldr     r0, [sp, #8]
+    ldr     r4, [sp, #12]
     svc     0x08
+    ldr     r2, [sp], #4
+    str     r1, [r2]
+    ldr     r4, [sp], #4
+    bx      lr
+
+.global saltysd_svc_exit_thread
+.type saltysd_svc_exit_thread, %function
+saltysd_svc_exit_thread:
+    svc     0x09
     bx      lr
 
 .global saltysd_svc_sleep
@@ -21,7 +33,11 @@ saltysd_svc_sleep:
 .global saltysd_svc_arbitrate
 .type saltysd_svc_arbitrate, %function
 saltysd_svc_arbitrate:
+    push    {r4, r5}
+    ldr     r4, [sp, #8]
+    ldr     r5, [sp, #12]
     svc     0x22
+    pop     {r4, r5}
     bx      lr
 
 @ ARMv6K exclusives; preemption-safe admission
