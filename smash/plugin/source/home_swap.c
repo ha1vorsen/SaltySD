@@ -9,6 +9,9 @@
 #define PLG_GATE_LOCK      0x80000000u
 #define PLG_GATE_ACTIVE    0x7fffffffu
 #define THREADVARS_MAGIC   0x21545624u
+#define HOME_START_INVALID ((int)0xE0000003)
+#define HOME_START_TIMEOUT ((int)0xE0000004)
+#define HOME_START_WAIT_MS 1000
 
 typedef struct {
     u32 magic;
@@ -23,6 +26,7 @@ typedef struct {
 
 extern int saltysd_svc_create_thread(u32 *out, void (*entry)(u32), u32 arg,
                                      u32 *stack_top, int priority, int core);
+extern void saltysd_svc_exit_thread(void);
 extern void saltysd_svc_sleep(u64 ns);
 extern int saltysd_svc_arbitrate(u32 arbiter, u32 address, int action,
                                  int value, u64 timeout);
@@ -30,6 +34,24 @@ extern void *get_thread_tls(void);
 extern int saltysd_gate_try_lock(volatile u32 *gate);
 
 static u8 home_stack[0x1000] __attribute__((aligned(8)));
+static volatile int home_start_result;
+static volatile u32 home_start_ready;
+
+static void publish_start_result(int result)
+{
+    u32 barrier = 0;
+    home_start_result = result;
+    __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" :: "r"(barrier) : "memory");
+    home_start_ready = 1;
+}
+
+static void __attribute__((noreturn)) fail_start(int result)
+{
+    publish_start_result(result);
+    saltysd_svc_exit_thread();
+    for (;;)
+        ;
+}
 
 static volatile u32 *home_gate(void)
 {
@@ -78,14 +100,19 @@ static void home_worker(u32 ignored)
     *(volatile u32 *)get_thread_tls() = THREADVARS_MAGIC;
 
     u32 arbiter;
-    if (plgldr_arbiter(&arbiter) < 0)
-        return;
+    int result = plgldr_arbiter(&arbiter);
+    if (result < 0)
+        fail_start(result);
 
     PluginHeader *header = (PluginHeader *)0x07000000;
     volatile int *event = header->event;
     volatile int *reply = header->reply;
-    if (!event || !reply)
-        return;
+    if (!event || !reply) {
+        ipc_close(arbiter);
+        fail_start(HOME_START_INVALID);
+    }
+
+    publish_start_result(0);
 
     for (;;) {
         if (*event != PLG_ABOUT_TO_SWAP) {
@@ -108,10 +135,25 @@ static void home_worker(u32 ignored)
     }
 }
 
-void saltysd_home_swap_start(void)
+int saltysd_home_swap_start(void)
 {
-    u32 thread;
-    saltysd_svc_create_thread(&thread, home_worker, 0,
-                              (u32 *)(home_stack + sizeof(home_stack)),
-                              0x3f, -1);
+    u32 thread = 0;
+    home_start_ready = 0;
+    *home_gate() = PLG_GATE_LOCK;
+    int result = saltysd_svc_create_thread(&thread, home_worker, 0,
+                                           (u32 *)(home_stack + sizeof(home_stack)),
+                                           0x3f, -1);
+    if (result < 0)
+        return result;
+
+    ipc_close(thread);
+    for (u32 waited = 0; !home_start_ready && waited < HOME_START_WAIT_MS; waited++)
+        saltysd_svc_sleep(1000000);
+    if (!home_start_ready)
+        return HOME_START_TIMEOUT;
+    if (home_start_result < 0)
+        return home_start_result;
+
+    *home_gate() = 0;
+    return 0;
 }

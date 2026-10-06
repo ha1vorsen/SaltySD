@@ -27,6 +27,7 @@ typedef struct {
     unsigned int install_stage;
     int install_result;
     unsigned int gate_expired;
+    int home_result;
     unsigned int legacy;
     unsigned int plugins_listed;
     unsigned int plugins_applied;
