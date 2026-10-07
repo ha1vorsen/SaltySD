@@ -1,5 +1,6 @@
 #include "plugins.h"
 #include "plugins_cro.h"
+#include "content.h"
 #include "fs.h"
 #include "status.h"
 #include "common.h"
@@ -13,7 +14,6 @@
 
 #include "types.h"
 
-#define PLUGINS_ROOT      "/luma/titles/smash/engine"
 #define CLAIMS_MAX        256
 #define READ_BATCH        8
 #define PATH_CHARS        0x101
@@ -136,7 +136,7 @@ static u8 cro_pending[PLUGINS_MAX];
 static u32 cro_pending_count;
 static boot_package boot_packages[PLUGINS_MAX];
 static se_plan boot_plan;
-toggle_list plugins = { PLUGINS_ROOT, entries, PLUGINS_MAX, 0, 0 };
+toggle_list plugins = { SALTYSD_ENGINE_ROOT, entries, PLUGINS_MAX, 0, 0 };
 
 u8 plugins_image[PLUGIN_IMAGE_SIZE];
 #define image plugins_image

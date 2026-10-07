@@ -8,14 +8,11 @@ typedef int bool;
 
 #include <stdarg.h>
 #include "common.h"
+#include "content.h"
 #include "index.h"
 #include "boot_log.h"
 #include "version.h"
 
-#define SALTYSD_LOOSE_ROOT     "sd:/luma/titles/smash"
-#define SALTYSD_SD_LOOSE_ROOT  "sdmc:/luma/titles/smash/"
-#define SALTYSD_MOD_ROOT       "sd:/saltysd/smash"
-#define SALTYSD_SD_MOD_ROOT    "sdmc:/saltysd/smash/"
 #define SALTYSD_DISABLED_MARKER "is.disabled"
 #define SALTYSD_MAX_MODS       62
 #define SALTYSD_MAX_ROOTS      (SALTYSD_MAX_MODS + 1)
@@ -245,12 +242,18 @@ static u16 lower(u16 c)
     return c;
 }
 
-static bool is_plugins_dir(const u16 *name)
+static bool wide_equals_ascii(const u16 *name, const char *want)
 {
-    for (const char *want = "plugins"; *want; name++, want++)
+    for (; *want; name++, want++)
         if (lower(*name) != *want)
             return false;
     return !*name;
+}
+
+static bool is_reserved_dir(const u16 *name)
+{
+    return wide_equals_ascii(name, SALTYSD_ENGINE_DIR) ||
+           wide_equals_ascii(name, SALTYSD_LEGACY_ENGINE_DIR);
 }
 
 u32 len_to(char *str, char chr)
@@ -839,6 +842,7 @@ static void idx_key(idx_header *h, rf_header *tree, saltysd_root *roots, u32 num
                     u32 entries_before, u32 entry_size_before, u32 string_size_before)
 {
     h->build = fnv1a(2166136261u, SALTYSD_IDENTITY, strlen(SALTYSD_IDENTITY) + 1);
+    h->policy = SALTYSD_INDEX_POLICY;
     h->title = SALTYSD_TITLE_ID;
     h->mods = idx_mod_hash(roots, num_roots);
     h->entry_reserve = SALTYSD_ENTRY_RESERVE;
@@ -976,7 +980,8 @@ static bool idx_usable(idx_header *h, u32 size, idx_header *key, idx_tree *t)
     if (size < sizeof(idx_header) || h->magic != SALTYSD_INDEX_MAGIC || h->total_size > size)
         return false;
 
-    if (h->build != key->build || h->title != key->title || h->mods != key->mods ||
+    if (h->build != key->build || h->policy != key->policy || h->title != key->title ||
+        h->mods != key->mods ||
         h->entry_reserve != key->entry_reserve || h->tree_entries != key->tree_entries ||
         h->tree_entry_size != key->tree_entry_size ||
         h->tree_string_size != key->tree_string_size || h->tree_timestamp != key->tree_timestamp)
@@ -1458,7 +1463,7 @@ void _main(rf_header *header, void *contents)
                     copy_entry_path(entry_path, dir_entry);
 
                     if (dir_entry->is_directory) {
-                        if (i == 0 && is_plugins_dir(entry_path))
+                        if (i == 0 && is_reserved_dir(entry_path))
                             continue;
 
                         //Checked before anything is allocated: the queue array
