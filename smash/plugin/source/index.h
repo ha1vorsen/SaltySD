@@ -5,6 +5,7 @@
 
 #define SALTYSD_INDEX_PATH "sd:/saltysd/.saltysd-"
 #define SALTYSD_INDEX_MAGIC 0x58444953u /* 'SIDX' */
+#define SALTYSD_INDEX_POLICY 1u
 
 typedef struct __attribute__((__packed__)) {
     u32 id;
@@ -42,8 +43,9 @@ typedef struct __attribute__((__packed__)) {
     u32 magic;
     u32 total_size;
 
-    u32 build;         /* fnv1a over SALTYSD_IDENTITY */
-    u32 title;         /* SALTYSD_TITLE_ID */
+    u32 build;
+    u32 policy;
+    u32 title;
     u32 mods;          /* fnv1a over every mod folder and its state */
     u32 entry_reserve; /* every offset below assumes this prologue */
     u32 tree_entries;  /* resourceentry_amt before SaltySD touched it */

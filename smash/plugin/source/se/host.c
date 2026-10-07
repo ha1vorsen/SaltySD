@@ -1,6 +1,7 @@
 #include "host_internal.h"
 
 #include "common.h"
+#include "content.h"
 #include "fs.h"
 #include "toggles.h"
 #include "se/diagnostics.h"
@@ -11,7 +12,6 @@
 #define HOST_FILES_MAX 16
 #define HOST_HOOK_DECLARATIONS_MAX 64
 #define HOST_PATH_CHARS 0x101
-#define HOST_ROOT "/luma/titles/smash/engine"
 
 typedef struct {
     void *base;
@@ -174,7 +174,7 @@ static int host_open_read(se_package_handle owner, const char *relative_path,
         return -1;
     if (!open_files && fs_open() < 0)
         return -1;
-    u32 at = append_ascii(file_path, HOST_PATH_CHARS, 0, HOST_ROOT "/");
+    u32 at = append_ascii(file_path, HOST_PATH_CHARS, 0, SALTYSD_ENGINE_ROOT "/");
     at = append_utf16(file_path, HOST_PATH_CHARS, at, folders[package]);
     at = append_ascii(file_path, HOST_PATH_CHARS, at, "/");
     append_ascii(file_path, HOST_PATH_CHARS, at, relative_path);
