@@ -120,6 +120,8 @@ typedef struct {
     se_variant_record_v2 variant;
     u32 init_address;
     u32 cro_loaded_address;
+    u32 claim_mark;
+    cro_plugin *retained;
     u8 initialized;
 } boot_package;
 
@@ -155,6 +157,7 @@ static sea_target targets[PLUGIN_TARGETS_MAX];
 static u32 num_targets;
 
 static void *(*game_alloc)(u32 size) = (void *)liballoc_ADDR;
+static void (*game_free)(void *memory) = (void *)libdealloc_ADDR;
 
 static const SaltPatch *reserved;
 static u32 num_reserved;
@@ -738,8 +741,10 @@ static int retain_cro(const u8 *fix_desc, u32 fix_len, cro_plugin **out)
         stored++;
     }
     if (data_at != at || stored != cro_fixups ||
-        (fix_desc && fix_len != 4 + fix_count * FIXUP_SIZE))
+        (fix_desc && fix_len != 4 + fix_count * FIXUP_SIZE)) {
+        game_free(plugin);
         return PLUGIN_BAD_FIXUP;
+    }
     *out = plugin;
     return PLUGIN_OK;
 }
@@ -866,6 +871,18 @@ static void write_file(void)
         if (segs[i].target)
             continue;
         const u8 *src = segs[i].data;
+        volatile u8 *at = (volatile u8 *)segs[i].addr;
+        for (u32 b = 0; b < segs[i].size; b++)
+            at[b] = src[b];
+    }
+}
+
+static void restore_file(void)
+{
+    for (u32 i = 0; i < num_segs; i++) {
+        if (segs[i].target)
+            continue;
+        const u8 *src = segs[i].original;
         volatile u8 *at = (volatile u8 *)segs[i].addr;
         for (u32 b = 0; b < segs[i].size; b++)
             at[b] = src[b];
@@ -1210,6 +1227,8 @@ static int commit_file(u32 index)
         se_claims_restore(&claims, mark);
         return code;
     }
+    package->claim_mark = mark;
+    package->retained = retained;
     write_file();
     if (retained)
         plugins_cro_register(retained);
@@ -1255,36 +1274,39 @@ static void maintain_caches(void)
     __asm__ volatile ("svc 0x94" ::: "r0", "r1", "r2", "r3", "r12", "memory");
 }
 
-static void initialize_ready(void)
+static void initialize_package(u16 package)
 {
     maintain_caches();
     const se_host_v1 *host = se_get_host(SE_HOST_ABI_MAJOR);
-    for (u32 ordered = 0; ordered < boot_plan.order_count; ordered++) {
-        u16 package = boot_plan.order[ordered];
-        se_plan_package *planned = &boot_plan.packages[package];
-        u32 index = planned->discovery_index;
-        boot_package *record = &boot_packages[index];
-        if (!record->sea2 || record->initialized || planned->state != SE_PACKAGE_APPLIED)
-            continue;
-        int dependencies = dependencies_committed(package);
-        if (dependencies <= 0)
-            continue;
-        if (record->init_address) {
-            se_init_fn init = (se_init_fn)record->init_address;
-            int result = init(host, package + 1);
-            if (result) {
-                se_plan_refuse(&boot_plan, package, PLUGIN_INCOMPATIBLE, SE_PLAN_NONE);
-                se_plan_propagate_refusals(&boot_plan);
-                se_diagnostics_emit(package, SE_PHASE_INIT, PLUGIN_INCOMPATIBLE,
-                                    SE_PLAN_NONE, (u32)result, 0);
-                saltysd_status.plugins_result = result;
-                continue;
+    se_plan_package *planned = &boot_plan.packages[package];
+    boot_package *record = &boot_packages[planned->discovery_index];
+    if (!record->sea2 || record->initialized || planned->state != SE_PACKAGE_APPLIED ||
+        dependencies_committed(package) <= 0)
+        return;
+    if (record->init_address) {
+        se_init_fn init = (se_init_fn)record->init_address;
+        int result = init(host, package + 1);
+        if (result) {
+            se_error cleanup = se_host_quiesce_owner(package + 1);
+            restore_file();
+            if (record->retained) {
+                plugins_cro_unregister(record->retained);
+                record->retained = 0;
             }
+            se_claims_restore(&claims, record->claim_mark);
+            maintain_caches();
+            se_host_release_owner(package + 1);
+            se_plan_refuse(&boot_plan, package, SE_ERROR_INIT_FAILED, SE_PLAN_NONE);
+            se_plan_propagate_refusals(&boot_plan);
+            se_diagnostics_emit(package, SE_PHASE_INIT, SE_ERROR_INIT_FAILED,
+                                SE_PLAN_NONE, (u32)result, cleanup);
+            saltysd_status.plugins_result = SE_ERROR_INIT_FAILED;
+            return;
         }
-        record->initialized = 1;
-        planned->state = SE_PACKAGE_ACTIVE;
-        se_diagnostics_state(package, SE_PACKAGE_ACTIVE);
     }
+    record->initialized = 1;
+    planned->state = SE_PACKAGE_ACTIVE;
+    se_diagnostics_state(package, SE_PACKAGE_ACTIVE);
 }
 
 static void refresh_status(void)
@@ -1341,9 +1363,9 @@ void plugins_cro_prepare(void)
         } else {
             boot_plan.packages[package].state = SE_PACKAGE_APPLIED;
             se_diagnostics_state(package, SE_PACKAGE_APPLIED);
+            initialize_package(package);
         }
     }
-    initialize_ready();
     refresh_status();
     fs_close();
 }
@@ -1364,6 +1386,8 @@ void plugins_load(const SaltPatch *table, u32 count, u32 code_end)
         boot_packages[i].plan_index = SE_PLAN_NONE;
         boot_packages[i].init_address = 0;
         boot_packages[i].cro_loaded_address = 0;
+        boot_packages[i].claim_mark = 0;
+        boot_packages[i].retained = 0;
         boot_packages[i].initialized = 0;
     }
 
@@ -1445,8 +1469,8 @@ void plugins_load(const SaltPatch *table, u32 count, u32 code_end)
         }
         boot_plan.packages[package].state = SE_PACKAGE_APPLIED;
         se_diagnostics_state(package, SE_PACKAGE_APPLIED);
+        initialize_package(package);
     }
-    initialize_ready();
     refresh_status();
     fs_close();
 }

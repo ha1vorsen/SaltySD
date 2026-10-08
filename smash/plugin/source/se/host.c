@@ -216,6 +216,15 @@ static void host_close(se_file_handle file)
         fs_close();
 }
 
+static void close_file_slot(u32 slot)
+{
+    fs_file_close(files[slot].game_handle);
+    files[slot].used = 0;
+    files[slot].owner = 0;
+    if (open_files)
+        open_files--;
+}
+
 static int host_emit_diagnostic(se_package_handle owner, se_u32 code,
                                 se_u32 detail_a, se_u32 detail_b)
 {
@@ -272,15 +281,60 @@ const se_host_v1 *se_get_host(se_u32 requested_major)
 
 void se_host_reset(void)
 {
-    for (u32 i = 0; i < HOST_ALLOCATIONS_MAX; i++)
-        allocations[i].base = allocations[i].aligned = 0;
+    for (u32 i = 0; i < SE_PLAN_PACKAGES_MAX; i++)
+        if (package_known[i])
+            se_hooks_remove_owner(i + 1);
+    u32 closed = 0;
     for (u32 i = 0; i < HOST_FILES_MAX; i++)
-        files[i].used = 0;
+        if (files[i].used) {
+            close_file_slot(i);
+            closed = 1;
+        }
+    if (closed && !open_files)
+        fs_close();
+    for (u32 i = 0; i < HOST_ALLOCATIONS_MAX; i++) {
+        if (allocations[i].base)
+            game_free(allocations[i].base);
+        allocations[i].base = allocations[i].aligned = 0;
+        allocations[i].owner = 0;
+        allocations[i].size = 0;
+    }
     for (u32 i = 0; i < SE_PLAN_PACKAGES_MAX; i++)
         package_known[i] = 0;
     open_files = 0;
     hook_declaration_count = 0;
     se_hooks_reset();
+}
+
+se_error se_host_quiesce_owner(se_package_handle owner)
+{
+    u32 closed = 0;
+    for (u32 i = 0; i < HOST_FILES_MAX; i++)
+        if (files[i].used && files[i].owner == owner) {
+            close_file_slot(i);
+            closed = 1;
+        }
+    if (closed && !open_files)
+        fs_close();
+
+    u32 out = 0;
+    for (u32 i = 0; i < hook_declaration_count; i++)
+        if (hook_declarations[i].owner != owner)
+            hook_declarations[out++] = hook_declarations[i];
+    hook_declaration_count = out;
+    return se_hooks_remove_owner(owner);
+}
+
+void se_host_release_owner(se_package_handle owner)
+{
+    for (u32 i = 0; i < HOST_ALLOCATIONS_MAX; i++) {
+        if (!allocations[i].base || allocations[i].owner != owner)
+            continue;
+        game_free(allocations[i].base);
+        allocations[i].base = allocations[i].aligned = 0;
+        allocations[i].owner = 0;
+        allocations[i].size = 0;
+    }
 }
 
 se_u32 se_host_hook_mark(void)

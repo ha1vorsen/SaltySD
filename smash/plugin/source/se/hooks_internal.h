@@ -12,5 +12,6 @@ se_error se_hooks_install_pointer(se_package_handle owner, se_u32 target_id,
 se_error se_hooks_install(se_package_handle owner, const se_hook_request *request,
                           se_hook_result *result);
 se_error se_hooks_remove(se_package_handle owner, se_hook_handle hook);
+se_error se_hooks_remove_owner(se_package_handle owner);
 
 #endif

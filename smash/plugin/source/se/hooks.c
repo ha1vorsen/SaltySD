@@ -110,3 +110,27 @@ se_error se_hooks_remove(se_package_handle owner, se_hook_handle handle)
         generations[encoded_slot - 1] = 1;
     return PLUGIN_OK;
 }
+
+se_error se_hooks_remove_owner(se_package_handle owner)
+{
+    se_error result = PLUGIN_OK;
+    int changed = 0;
+    for (se_u32 i = 0; i < SE_HOOKS_MAX; i++) {
+        managed_hook *hook = &hooks[i];
+        if (!hook->active || hook->owner != owner)
+            continue;
+        if (*hook->slot == hook->handler) {
+            *hook->slot = hook->original;
+            changed = 1;
+        } else {
+            result = SE_ERROR_HOOK_TARGET_CHANGED;
+        }
+        hook->active = 0;
+        generations[i]++;
+        if (!generations[i])
+            generations[i] = 1;
+    }
+    if (changed)
+        maintain_data_cache();
+    return result;
+}

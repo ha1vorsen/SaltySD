@@ -1,6 +1,7 @@
 #include "plugins_cro.h"
 #include "plugins.h"
 #include "status.h"
+#include "common.h"
 
 #define CRO_MAGIC_OFFS 0x80
 #define CRO_NAME_OFFS 0x84
@@ -28,6 +29,7 @@ static runtime_segment placed[PLUGIN_SEGS_MAX];
 static u32 buckets[256][PLUGIN_SIGS_MAX / 32];
 static u32 counts[PLUGIN_SIGS_MAX];
 static u32 matches[PLUGIN_SIGS_MAX];
+static void (*game_free)(void *memory) = (void *)libdealloc_ADDR;
 
 static u32 rd32(const u8 *p)
 {
@@ -292,6 +294,25 @@ void plugins_cro_register(cro_plugin *plugin)
     else
         first_plugin = plugin;
     last_plugin = plugin;
+}
+
+void plugins_cro_unregister(cro_plugin *plugin)
+{
+    cro_plugin *previous = 0;
+    cro_plugin *current = first_plugin;
+    while (current && current != plugin) {
+        previous = current;
+        current = current->next;
+    }
+    if (!current)
+        return;
+    if (previous)
+        previous->next = current->next;
+    else
+        first_plugin = current->next;
+    if (last_plugin == current)
+        last_plugin = previous;
+    game_free(current);
 }
 
 void plugins_cro_loaded(u32 base)
