@@ -37,6 +37,7 @@ const char *se_error_text(se_error error)
         [SE_ERROR_HOOK_CONFLICT] = "hook target already has an owner",
         [SE_ERROR_HOOK_TARGET_CHANGED] = "hook target changed outside the manager",
         [SE_ERROR_HOOK_FULL] = "managed hook table is exhausted",
+        [SE_ERROR_INIT_FAILED] = "package initialization failed",
     };
     unsigned int value = (unsigned int)error;
     if (value >= sizeof(messages) / sizeof(messages[0]) || !messages[value])

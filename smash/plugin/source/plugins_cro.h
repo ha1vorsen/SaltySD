@@ -62,6 +62,7 @@ typedef struct cro_plugin {
 extern u8 plugins_image[PLUGIN_IMAGE_SIZE];
 
 void plugins_cro_register(cro_plugin *plugin);
+void plugins_cro_unregister(cro_plugin *plugin);
 void plugins_cro_loaded(u32 base);
 
 #endif

@@ -36,6 +36,7 @@ typedef enum {
     SE_ERROR_HOOK_CONFLICT = 45,
     SE_ERROR_HOOK_TARGET_CHANGED = 46,
     SE_ERROR_HOOK_FULL = 47,
+    SE_ERROR_INIT_FAILED = 48,
 } se_error;
 
 const char *se_error_text(se_error error);

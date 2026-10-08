@@ -3,10 +3,13 @@
 
 #include <se/host.h>
 
+#include "se/errors.h"
 #include "types.h"
 
 void se_host_reset(void);
 void se_host_register_package(se_package_handle handle, const u16 *folder_name);
+se_error se_host_quiesce_owner(se_package_handle owner);
+void se_host_release_owner(se_package_handle owner);
 se_u32 se_host_hook_mark(void);
 void se_host_hook_restore(se_u32 mark);
 int se_host_allow_hook(se_package_handle owner, se_u32 target_id,
