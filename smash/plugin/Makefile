@@ -40,7 +40,7 @@ ifeq ($(UPDATE_TEST),1)
 CFLAGS  += -DSALTYSD_UPDATE_TEST
 TARGET  := saltysd-TEST
 endif
-VERSION := 2.0.0
+VERSION := 2.1.0
 ifneq ($(BUILT_AT),)
 ifeq ($(shell echo "$(BUILT_AT)" | grep -E "^[0-9]{14}$$"),)
 $(error BUILT_AT must be 14 digits, YYYYMMDDHHMMSS)
@@ -48,7 +48,13 @@ endif
 endif
 BUILT_AT ?= 00000000000000
 
+ifneq ($(strip $(DIRTY_ID)),)
+IDENTITY := $(DIRTY_ID)
+IDENTITY_DEFINE := SALTYSD_COMMIT
+else
 IDENTITY := $(VERSION)
+IDENTITY_DEFINE := SALTYSD_VERSION
+endif
 LDFLAGS := $(ARCH) -T 3gx.ld -nostdlib -nostartfiles \
            -Wl,--gc-sections,--strip-discarded,-Map,$(BUILD)/$(TARGET).map
 
@@ -76,7 +82,7 @@ $(BUILD)/input-identity.txt: FORCE ../tools/write_input_identity.py | $(BUILD)
 	@python ../tools/write_input_identity.py $@ "$(CODEBIN)" "$(PATCHED)" $(wildcard ../legacy/*.ips)
 
 $(BUILD)/build-config.txt: FORCE ../tools/write_text_if_changed.py | $(BUILD)
-	@python ../tools/write_text_if_changed.py $@ "TITLE_IDS=$(TITLE_IDS)" "VERSION=$(VERSION)" "BUILT_AT=$(BUILT_AT)"
+	@python ../tools/write_text_if_changed.py $@ "TITLE_IDS=$(TITLE_IDS)" "IDENTITY=$(IDENTITY)" "IDENTITY_DEFINE=$(IDENTITY_DEFINE)" "BUILT_AT=$(BUILT_AT)"
 
 $(BUILD)/se_targets.generated.h: $(BUILD)/input-identity.txt $(BUILD)/build-config.txt ../sdk/targets/smash-1.1.7.toml ../tools/gen_se_registry.py | $(BUILD)
 	@python ../tools/gen_se_registry.py --registry ../sdk/targets/smash-1.1.7.toml --title-id 0x$(firstword $(TITLE_IDS)) --code "$(CODEBIN)" --out $@
@@ -103,7 +109,7 @@ $(BUILD)/legacy.h: $(BUILD)/input-identity.txt $(BUILD)/build-config.txt $(CODEB
 $(BUILD)/main.o: $(BUILD)/patches.h $(BUILD)/legacy.h
 
 $(BUILD)/buildinfo.h: FORCE | $(BUILD)
-	@echo '#define SALTYSD_VERSION "$(VERSION)"' > $@
+	@echo '#define $(IDENTITY_DEFINE) "$(IDENTITY)"' > $@
 	@echo '#define SALTYSD_BUILT_AT "$(BUILT_AT)"' >> $@
 
 $(BUILD)/resource_mod.o $(BUILD)/tetra_menu.o $(BUILD)/update.o: $(BUILD)/buildinfo.h

@@ -1,4 +1,4 @@
-registry_revision = 1
+registry_revision = 2
 
 [[builds]]
 id = 0x01170001
@@ -7,10 +7,24 @@ game_version = "1.1"
 region = "usa"
 code_sha256 = "79349A846555B902BB131BF7E29F592E4845B807E33A26D42A2DCF2C39470922"
 
+[[builds]]
+id = 0x01170002
+title_id = 0x000EE000
+game_version = "1.1"
+region = "eur"
+code_sha256 = "5F8052252B3FA711A4DEF5FA46C6BD184284219C6B844F9904728B4D0FED7BF2"
+
+[[builds]]
+id = 0x01170003
+title_id = 0x000B8B00
+game_version = "1.1"
+region = "jpn"
+code_sha256 = "C85EE7E113E73BCE1A99029276F6E1BF5DE850A788395C02BA39B38F5028C8F4"
+
 [[targets]]
 id = 0x00010000
 name = "smash.fighter.animcmd.hittest.handler_site"
-build = 0x01170001
+builds = [0x01170001, 0x01170002, 0x01170003]
 address = 0x00A2B800
 span = 0x15C
 kind = "patch_site"
@@ -22,7 +36,7 @@ mask = "FF FF FF FF FF FF FF FF FF FF FF FF"
 [[targets]]
 id = 0x00010001
 name = "smash.fighter.animcmd.hittest.remove_all_slot"
-build = 0x01170001
+builds = [0x01170001, 0x01170002, 0x01170003]
 address = 0x00C2D214
 span = 4
 kind = "pointer_slot"
@@ -34,7 +48,7 @@ mask = "FF FF FF FF"
 [[targets]]
 id = 0x00010002
 name = "smash.fighter.animcmd.hittest.hitbox_slot"
-build = 0x01170001
+builds = [0x01170001, 0x01170002, 0x01170003]
 address = 0x00C2D26C
 span = 4
 kind = "pointer_slot"
@@ -46,7 +60,7 @@ mask = "FF FF FF FF"
 [[targets]]
 id = 0x00010003
 name = "smash.fighter.animcmd.hittest.extended_slot"
-build = 0x01170001
+builds = [0x01170001, 0x01170002, 0x01170003]
 address = 0x00C2D278
 span = 4
 kind = "pointer_slot"
@@ -58,7 +72,7 @@ mask = "FF FF FF FF"
 [[targets]]
 id = 0x00010004
 name = "smash.fighter.animcmd.hittest.special_slot"
-build = 0x01170001
+builds = [0x01170001, 0x01170002, 0x01170003]
 address = 0x00C2D280
 span = 4
 kind = "pointer_slot"
@@ -70,7 +84,7 @@ mask = "FF FF FF FF"
 [[targets]]
 id = 0x00010005
 name = "smash.fighter.animcmd.hittest.extended_special_slot"
-build = 0x01170001
+builds = [0x01170001, 0x01170002, 0x01170003]
 address = 0x00C2D288
 span = 4
 kind = "pointer_slot"

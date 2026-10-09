@@ -12,6 +12,8 @@
 #define HOME_START_INVALID ((int)0xE0000003)
 #define HOME_START_TIMEOUT ((int)0xE0000004)
 #define HOME_START_WAIT_MS 1000
+/* Azahar's GetArbiter returns ResultNotImplemented and crashes, emulation needs special handling for now :') */
+#define PLG_GET_ARBITER_UNIMPLEMENTED ((int)0xE0E01BF4)
 
 typedef struct {
     u32 magic;
@@ -48,6 +50,14 @@ static void publish_start_result(int result)
 static void __attribute__((noreturn)) fail_start(int result)
 {
     publish_start_result(result);
+    saltysd_svc_exit_thread();
+    for (;;)
+        ;
+}
+
+static void __attribute__((noreturn)) finish_without_worker(void)
+{
+    publish_start_result(0);
     saltysd_svc_exit_thread();
     for (;;)
         ;
@@ -101,6 +111,8 @@ static void home_worker(u32 ignored)
 
     u32 arbiter;
     int result = plgldr_arbiter(&arbiter);
+    if (result == PLG_GET_ARBITER_UNIMPLEMENTED)
+        finish_without_worker();
     if (result < 0)
         fail_start(result);
 

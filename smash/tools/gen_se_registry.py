@@ -54,6 +54,20 @@ def hex_bytes(value, field):
     return result
 
 
+def target_build_ids(target, index):
+    has_build = "build" in target
+    has_builds = "builds" in target
+    if has_build == has_builds:
+        raise SystemExit(f"target {index} must define exactly one of build or builds")
+    values = target["builds"] if has_builds else [target["build"]]
+    if not isinstance(values, list) or not values:
+        raise SystemExit(f"target {index} builds must be a non-empty list")
+    result = [integer(value, f"target {index} build") for value in values]
+    if len(result) != len(set(result)):
+        raise SystemExit(f"target {index} names a build more than once")
+    return result
+
+
 def aligned_matches(image, pattern, mask):
     if all(byte == 0xFF for byte in mask):
         matches = []
@@ -113,8 +127,8 @@ def main():
     if region is None:
         raise SystemExit("build region is unsupported")
 
-    targets = [item for item in registry.get("targets", [])
-               if integer(item.get("build"), "target build") == build_id]
+    targets = [item for index, item in enumerate(registry.get("targets", []))
+               if build_id in target_build_ids(item, index)]
     if not targets:
         raise SystemExit("selected build has no targets")
     seen_ids = set()
