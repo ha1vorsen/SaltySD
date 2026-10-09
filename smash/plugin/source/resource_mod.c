@@ -601,6 +601,83 @@ typedef struct {
     saltysd_named *named;
 } saltysd_map;
 
+typedef struct {
+    void **blocks;
+    char **extensions;
+    void *ifile_handle;
+    saltysd_root *roots;
+    char *loose_path;
+    char *loose_prefix;
+    void *mod_entries;
+    u16 *mod_root;
+    u8 *root_table;
+    void *dir_entries;
+    u16 **dirs;
+    u8 *dir_roots;
+    char **files;
+    u32 *file_sizes;
+    u8 *file_roots;
+    char *full_name;
+    char *substr;
+    char *file_ext;
+    saltysd_map *map;
+} scan_work;
+
+static void scan_work_free(scan_work *work)
+{
+    free(work->map);
+    free(work->file_roots);
+    free(work->file_sizes);
+    free(work->files);
+    free(work->file_ext);
+    free(work->substr);
+    free(work->full_name);
+    free(work->dir_roots);
+    free(work->dirs);
+    free(work->dir_entries);
+    free(work->root_table);
+    free(work->mod_root);
+    free(work->mod_entries);
+    free(work->loose_prefix);
+    free(work->loose_path);
+    free(work->roots);
+    free(work->ifile_handle);
+    free(work->extensions);
+    free(work->blocks);
+}
+
+static bool scan_work_alloc(scan_work *work, u32 string_blocks, u32 extension_capacity)
+{
+    memclr(work, sizeof(*work));
+    work->blocks = malloc(string_blocks * sizeof(void *));
+    work->extensions = malloc(extension_capacity * sizeof(char *));
+    work->ifile_handle = malloc(SALTYSD_IFILE_HANDLE_SIZE);
+    work->roots = malloc(SALTYSD_MAX_ROOTS * sizeof(saltysd_root));
+    work->loose_path = malloc(SALTYSD_ROOT_PATH_SIZE);
+    work->loose_prefix = malloc(SALTYSD_ROOT_PATH_SIZE);
+    work->mod_entries = malloc(SALTYSD_DIRECTORY_BATCH * sizeof(DirectoryEntry));
+    work->mod_root = malloc(SALTYSD_MAX_PATH * sizeof(u16));
+    work->root_table = malloc(SALTYSD_ID_SPACE);
+    work->dir_entries = malloc(SALTYSD_DIRECTORY_BATCH * sizeof(DirectoryEntry));
+    work->dirs = malloc(SALTYSD_MAX_DIRS * sizeof(u16 *));
+    work->dir_roots = malloc(SALTYSD_MAX_DIRS * sizeof(u8));
+    work->files = malloc(SALTYSD_MAX_FILES * sizeof(char *));
+    work->file_sizes = malloc(SALTYSD_MAX_FILES * sizeof(u32));
+    work->file_roots = malloc(SALTYSD_MAX_FILES * sizeof(u8));
+    work->full_name = malloc(SALTYSD_FULL_NAME_SIZE);
+    work->substr = malloc(SALTYSD_MAX_PATH);
+    work->file_ext = malloc(SALTYSD_MAX_EXT);
+    work->map = malloc(sizeof(saltysd_map));
+    if (work->blocks && work->extensions && work->ifile_handle && work->roots &&
+        work->loose_path && work->loose_prefix && work->mod_entries && work->mod_root &&
+        work->root_table && work->dir_entries && work->dirs && work->dir_roots &&
+        work->files && work->file_sizes && work->file_roots && work->full_name &&
+        work->substr && work->file_ext && work->map)
+        return true;
+    scan_work_free(work);
+    return false;
+}
+
 static saltysd_map *saltysd_get_map(void)
 {
     u32 singleton = *(u32 *)something_resource_lock_ADDR;
@@ -1206,6 +1283,34 @@ void _main(rf_header *header, void *contents)
         contents + (header->stringsection_start - header->contents_start);
     void *string_section_next = string_section_current + STRING_SHIFT;
 
+    u32 stock_blocks = *(u32 *)string_section_current;
+    void *stock_extensions = string_section_current + sizeof(u32) +
+                             SALTYSD_STRING_BLOCK_SIZE * stock_blocks;
+    u32 ext_capacity = *(u32 *)stock_extensions;
+    if (ext_capacity < SALTYSD_MAX_EXTENSIONS)
+        ext_capacity = SALTYSD_MAX_EXTENSIONS;
+
+    // all fallible fixed setup before resource-tree shifts
+    scan_work work;
+    if (!scan_work_alloc(&work, stock_blocks + 8, ext_capacity))
+        return;
+
+    void **blocks = work.blocks;
+    char **extensions = work.extensions;
+    void *ifile_handle = work.ifile_handle;
+    saltysd_root *roots = work.roots;
+    u8 *root_table = work.root_table;
+    void *dir_entries = work.dir_entries;
+    u16 **dirs = work.dirs;
+    u8 *dir_roots = work.dir_roots;
+    char **files = work.files;
+    u32 *file_sizes = work.file_sizes;
+    u8 *file_roots = work.file_roots;
+    char *full_name = work.full_name;
+    char *substr = work.substr;
+    char *file_ext = work.file_ext;
+    saltysd_map *map = work.map;
+
     memmove(string_section_next, string_section_current, header->stringsection_size);
     memclr(string_section_current, STRING_SHIFT);
     header->stringsection_start += STRING_SHIFT;
@@ -1224,7 +1329,6 @@ void _main(rf_header *header, void *contents)
     header->stringsection_size += EXT_SHIFT;
     header->decompressed_size += EXT_SHIFT;
     header->contents_size += EXT_SHIFT;
-    u32 stock_blocks = *(u32 *)string_section_next;
     *(u32 *)string_section_next += (EXT_SHIFT / SALTYSD_STRING_BLOCK_SIZE);
 
     rf_entry(*entries)[] = contents + header->entrysection_start - header->contents_start;
@@ -1232,17 +1336,11 @@ void _main(rf_header *header, void *contents)
     u32 string_block_count = *(u32 *)string_section_next;
     void *extensions_block = string_section_next + sizeof(u32) +
                              (SALTYSD_STRING_BLOCK_SIZE * string_block_count * sizeof(u8));
-    void **blocks = malloc(string_block_count * sizeof(void *));
     for (int i = 0; i < string_block_count; i++) {
         blocks[i] =
             string_section_next + sizeof(u32) + (SALTYSD_STRING_BLOCK_SIZE * i * sizeof(u8));
     }
 
-    u32 ext_capacity = *(u32 *)extensions_block;
-    if (ext_capacity < SALTYSD_MAX_EXTENSIONS)
-        ext_capacity = SALTYSD_MAX_EXTENSIONS;
-
-    char **extensions = malloc(ext_capacity * sizeof(char *));
     for (int i = 0; i < *(u32 *)extensions_block; i++) {
         u32 offs = *(u32 *)(extensions_block + sizeof(u32) + i * sizeof(u32));
         char *string =
@@ -1250,7 +1348,6 @@ void _main(rf_header *header, void *contents)
         extensions[i] = string;
     }
 
-    void *ifile_handle = malloc(SALTYSD_IFILE_HANDLE_SIZE);
     char *revoke_buf = NULL;
     char **revoked_files = NULL;
     u32 revoke_total_size = 0;
@@ -1262,20 +1359,18 @@ void _main(rf_header *header, void *contents)
                       boot_log_enabled(ifile_handle, log_paths.marker);
 
     u32 num_roots = 0;
-    saltysd_root *roots = malloc(SALTYSD_MAX_ROOTS * sizeof(saltysd_root));
-
-    roots[0].path = malloc(SALTYSD_ROOT_PATH_SIZE);
+    roots[0].path = work.loose_path;
     dumb_strcpy(roots[0].path, SALTYSD_LOOSE_ROOT);
-    roots[0].prefix = malloc(SALTYSD_ROOT_PATH_SIZE);
+    roots[0].prefix = work.loose_prefix;
     dumb_strcpy(roots[0].prefix, SALTYSD_SD_LOOSE_ROOT);
     roots[0].name = NULL;
     roots[0].enabled = 1;
     num_roots = 1;
 
     {
-        void *mod_entries = malloc(SALTYSD_DIRECTORY_BATCH * sizeof(DirectoryEntry));
+        void *mod_entries = work.mod_entries;
         void *mod_handle;
-        u16 *mod_root = malloc(SALTYSD_MAX_PATH * sizeof(u16));
+        u16 *mod_root = work.mod_root;
         dumb_mbstowcs(mod_root, SALTYSD_MOD_ROOT);
 
         if ((OpenDirectory(&mod_handle, mod_root) & 0x80000000) == 0) {
@@ -1289,19 +1384,25 @@ void _main(rf_header *header, void *contents)
                     if (!mod->is_directory)
                         continue;
 
-                    saltysd_root mod_root_rec;
+                    saltysd_root mod_root_rec = { 0 };
                     u16 mod_path[SALTYSD_MAX_PATH];
                     copy_entry_path(mod_path, mod);
 
                     mod_root_rec.name = malloc(SALTYSD_MAX_MOD_NAME);
-                    dumb_wcstombsn(mod_root_rec.name, mod_path, SALTYSD_MAX_MOD_NAME);
-
                     mod_root_rec.path = malloc(SALTYSD_ROOT_PATH_SIZE);
+                    mod_root_rec.prefix = malloc(SALTYSD_ROOT_PATH_SIZE);
+                    if (!mod_root_rec.name || !mod_root_rec.path || !mod_root_rec.prefix) {
+                        free(mod_root_rec.prefix);
+                        free(mod_root_rec.path);
+                        free(mod_root_rec.name);
+                        continue;
+                    }
+
+                    dumb_wcstombsn(mod_root_rec.name, mod_path, SALTYSD_MAX_MOD_NAME);
                     dumb_strcpy(mod_root_rec.path, SALTYSD_MOD_ROOT);
                     dumb_strcat(mod_root_rec.path, "/");
                     dumb_strcat(mod_root_rec.path, mod_root_rec.name);
 
-                    mod_root_rec.prefix = malloc(SALTYSD_ROOT_PATH_SIZE);
                     dumb_strcpy(mod_root_rec.prefix, SALTYSD_SD_MOD_ROOT);
                     dumb_strcat(mod_root_rec.prefix, mod_root_rec.name);
                     dumb_strcat(mod_root_rec.prefix, "/");
@@ -1333,14 +1434,14 @@ void _main(rf_header *header, void *contents)
 
         free(mod_root);
         free(mod_entries);
+        work.mod_root = NULL;
+        work.mod_entries = NULL;
     }
     BOOT_TICK(t_roots);
 
     //One byte of root per resource id. Indexed by id rather than ordinal, so it
     //has to be shifted alongside the entries whenever a new one is inserted.
-    u8 *root_table = malloc(SALTYSD_ID_SPACE);
-    if (root_table)
-        memclr(root_table, SALTYSD_ID_SPACE);
+    memclr(root_table, SALTYSD_ID_SPACE);
 
     idx_header key;
     idx_key(&key, header, roots, num_roots, entries_before, entrysection_before,
@@ -1349,7 +1450,7 @@ void _main(rf_header *header, void *contents)
     char index_path[SALTYSD_INDEX_NAME + sizeof(SALTYSD_INDEX_PATH)];
     idx_path(index_path, &key);
 
-    if (root_table) {
+    {
         u8 *index = NULL;
         u32 size = file_load(index_path, &index, SALTYSD_INDEX_MAX, ifile_handle);
 
@@ -1407,7 +1508,6 @@ void _main(rf_header *header, void *contents)
                     }
                 }
 
-                saltysd_map *map = malloc(sizeof(saltysd_map));
                 map->magic = SALTYSD_MAGIC;
                 map->num_roots = num_roots;
                 map->root_of = root_table;
@@ -1419,6 +1519,15 @@ void _main(rf_header *header, void *contents)
                 free(extensions);
                 free(blocks);
                 free(ifile_handle);
+                free(dir_entries);
+                free(dirs);
+                free(dir_roots);
+                free(files);
+                free(file_sizes);
+                free(file_roots);
+                free(full_name);
+                free(substr);
+                free(file_ext);
                 unmount_path("sd");
                 return;
             }
@@ -1431,17 +1540,17 @@ void _main(rf_header *header, void *contents)
     u32 num_files = 0;
     u32 dirs_skipped = 0;
     u32 files_skipped = 0;
-    void *dir_entries = malloc(SALTYSD_DIRECTORY_BATCH * sizeof(DirectoryEntry));
+    bool scan_complete = true;
     void *dir_handle;
-
-    u16 **dirs = malloc(SALTYSD_MAX_DIRS * sizeof(u16 *));
-    u8 *dir_roots = malloc(SALTYSD_MAX_DIRS * sizeof(u8));
-    char **files = malloc(SALTYSD_MAX_FILES * sizeof(char *));
-    u32 *file_sizes = malloc(SALTYSD_MAX_FILES * sizeof(u32));
-    u8 *file_roots = malloc(SALTYSD_MAX_FILES * sizeof(u8));
 
     for (int i = 0; i < num_roots; i++) {
         u16 *root_path = malloc(SALTYSD_MAX_PATH * sizeof(u16));
+        if (!root_path) {
+            dirs[i] = NULL;
+            dirs_skipped++;
+            scan_complete = false;
+            continue;
+        }
         dumb_mbstowcs(root_path, roots[i].path);
         dirs[i] = root_path;
         dir_roots[i] = i;
@@ -1449,6 +1558,8 @@ void _main(rf_header *header, void *contents)
 
     for (int i = 0; i < num_directories; i++) {
         u32 num_files_folders = 0;
+        if (!dirs[i])
+            continue;
         if ((OpenDirectory(&dir_handle, dirs[i]) & 0x80000000) == 0) {
             //ReadDirectory only hands back as many entries as we ask for and
             //then advances, so keep asking until it comes up short. Reading
@@ -1476,6 +1587,11 @@ void _main(rf_header *header, void *contents)
                         }
 
                         u16 *new_dir = malloc(SALTYSD_MAX_PATH * sizeof(u16));
+                        if (!new_dir) {
+                            dirs_skipped++;
+                            scan_complete = false;
+                            continue;
+                        }
                         new_dir[0] = 0;
 
                         dumb_wcscat(new_dir, dirs[i]);
@@ -1496,6 +1612,11 @@ void _main(rf_header *header, void *contents)
                         }
 
                         char *file = malloc(SALTYSD_MAX_PATH);
+                        if (!file) {
+                            files_skipped++;
+                            scan_complete = false;
+                            continue;
+                        }
                         file[0] = 0;
 
                         if (i >= num_roots) {
@@ -1513,6 +1634,12 @@ void _main(rf_header *header, void *contents)
                                 !strcmp(file + file_len - strlen(".txt"), ".txt")) {
                                 char *temp_real_path =
                                     malloc(SALTYSD_ROOT_PATH_SIZE + 1 + SALTYSD_MAX_PATH);
+                                if (!temp_real_path) {
+                                    free(file);
+                                    files_skipped++;
+                                    scan_complete = false;
+                                    continue;
+                                }
                                 dumb_strcpy(temp_real_path, roots[dir_roots[i]].path);
                                 dumb_strcat(temp_real_path, "/");
                                 dumb_strcat(temp_real_path, file);
@@ -1521,16 +1648,31 @@ void _main(rf_header *header, void *contents)
                                     u32 revoke_size = IFile_GetSize(ifile_handle);
                                     u32 revoke_read = 0;
                                     char *revoke_temp_buf = malloc(revoke_size + 1);
-                                    IFile_Read(ifile_handle, revoke_temp_buf, revoke_size,
-                                               &revoke_read);
+                                    if (revoke_temp_buf)
+                                        IFile_Read(ifile_handle, revoke_temp_buf, revoke_size,
+                                                   &revoke_read);
                                     IFile_Close(ifile_handle);
 
-                                    if (revoke_read > revoke_size)
-                                        revoke_read = revoke_size;
+                                    if (!revoke_temp_buf || revoke_read != revoke_size) {
+                                        free(revoke_temp_buf);
+                                        free(temp_real_path);
+                                        free(file);
+                                        files_skipped++;
+                                        scan_complete = false;
+                                        continue;
+                                    }
                                     revoke_temp_buf[revoke_read] = 0;
 
                                     u32 revoke_held = revoke_buf ? strlen(revoke_buf) : 0;
                                     char *new_alloc = malloc(revoke_held + 1 + revoke_read + 1);
+                                    if (!new_alloc) {
+                                        free(revoke_temp_buf);
+                                        free(temp_real_path);
+                                        free(file);
+                                        files_skipped++;
+                                        scan_complete = false;
+                                        continue;
+                                    }
                                     new_alloc[0] = 0;
                                     if (revoke_buf) {
                                         dumb_strcpy(new_alloc, revoke_buf);
@@ -1591,8 +1733,17 @@ void _main(rf_header *header, void *contents)
         }
         revoked_files = malloc(revoke_count * sizeof(char *));
 
+        if (!revoked_files) {
+            for (u32 i = 0; i < num_files; i++) {
+                free(files[i]);
+                files[i] = NULL;
+            }
+            revoke_count = 0;
+            scan_complete = false;
+        }
+
         char *last_file = revoke_buf;
-        for (int i = 0; i < revoke_total_size; i++) {
+        for (int i = 0; revoked_files && i < revoke_total_size; i++) {
             if (revoke_buf[i] == '\n') {
                 revoke_buf[i] = 0;
 
@@ -1612,9 +1763,11 @@ void _main(rf_header *header, void *contents)
                 last_file = &revoke_buf[i + 1];
             }
         }
-        revoke_count = revoke_active_count;
+        if (revoked_files)
+            revoke_count = revoke_active_count;
 
-        heap_sort((u32 *)revoked_files, revoke_count, cmp_string, NULL);
+        if (revoked_files)
+            heap_sort((u32 *)revoked_files, revoke_count, cmp_string, NULL);
     }
 
     //Hold back the two channels that live outside the resource tree, before the
@@ -1628,6 +1781,17 @@ void _main(rf_header *header, void *contents)
     }
 
     saltysd_named *named = num_named ? malloc(num_named * sizeof(saltysd_named)) : NULL;
+    if (num_named && !named) {
+        for (int i = 0; i < num_files; i++) {
+            if (files[i] &&
+                (starts_with(files[i], SALTYSD_CRO_DIR) || starts_with(files[i], SALTYSD_BGM_DIR))) {
+                free(files[i]);
+                files[i] = NULL;
+            }
+        }
+        num_named = 0;
+        scan_complete = false;
+    }
     u32 named_count = 0;
     for (int i = 0; i < num_files; i++) {
         if (files[i] == NULL)
@@ -1674,6 +1838,18 @@ void _main(rf_header *header, void *contents)
     u32 *sorted_order = num_sorted ? malloc(num_sorted * sizeof(u32)) : NULL;
     u32 *file_keys = num_sorted ? malloc(num_sorted * sizeof(u32)) : NULL;
     u32 *file_slots = num_sorted ? malloc(num_sorted * sizeof(u32)) : NULL;
+    if (num_sorted && (!sorted_order || !file_keys || !file_slots)) {
+        free(sorted_order);
+        free(file_keys);
+        free(file_slots);
+        sorted_order = file_keys = file_slots = NULL;
+        for (u32 i = 0; i < num_files; i++) {
+            free(files[i]);
+            files[i] = NULL;
+        }
+        num_sorted = 0;
+        scan_complete = false;
+    }
     u32 num_keys = 0;
     {
         u32 at = 0;
@@ -1741,10 +1917,10 @@ void _main(rf_header *header, void *contents)
     rec.exts = malloc(rec.max_exts * sizeof(idx_ext));
     rec.inserts = malloc(rec.max_inserts * sizeof(idx_insert));
     rec.text = malloc(rec.text_max);
-    rec.on = (!rec.max_revokes || rec.revokes) && (!rec.max_overrides || rec.overrides) &&
+    rec.on = scan_complete && (!rec.max_revokes || rec.revokes) &&
+             (!rec.max_overrides || rec.overrides) &&
              rec.strings && rec.exts && rec.inserts && rec.text;
 
-    char *full_name = malloc(SALTYSD_FULL_NAME_SIZE);
     memclr(full_name, SALTYSD_FULL_NAME_SIZE);
     u32 last_str_addr = 0;
     for (int i = 0; i < header->resourceentry_amt; i++) {
@@ -1851,8 +2027,6 @@ void _main(rf_header *header, void *contents)
         u8 entered_packed = 0;
 #endif
         u8 level_target = 1;
-        char *substr = malloc(SALTYSD_MAX_PATH);
-
         u32 seed_len = len_to(files[i], '/');
         if (seed_len == -1) {
             entry_to_shift = header->resourceentry_amt;
@@ -1969,7 +2143,6 @@ void _main(rf_header *header, void *contents)
         if (!fits) {
             printf("SaltySD no room left, dropping %s", files[i]);
             entries_skipped++;
-            free(substr);
             free(files[i]);
             files[i] = NULL;
             continue;
@@ -2023,7 +2196,6 @@ void _main(rf_header *header, void *contents)
         }
 
         u32 dot = last_index_of(substr, '.');
-        char *file_ext = malloc(SALTYSD_MAX_EXT);
         //Read whether or not there was a dot; an empty extension is what an
         //extensionless file matches.
         file_ext[0] = 0;
@@ -2068,8 +2240,6 @@ void _main(rf_header *header, void *contents)
             *(u32 *)extensions_block += 1;
         }
 
-        free(file_ext);
-
         u32 file_str = string_alloc(&last_str_addr, string_limit, strlen(substr));
         char *new_str =
             blocks[file_str / SALTYSD_STRING_BLOCK_SIZE] + (file_str & SALTYSD_STRING_BLOCK_MASK);
@@ -2092,7 +2262,6 @@ void _main(rf_header *header, void *contents)
         printf("flags: %x, %s", (*entries)[entry_to_shift].flags,
                entered_packed ? "entered packed" : "didn't enter packed");
 
-        free(substr);
         free(files[i]);
         files[i] = NULL;
     }
@@ -2171,6 +2340,8 @@ void _main(rf_header *header, void *contents)
     }
 
     free(full_name);
+    free(substr);
+    free(file_ext);
     free(files);
     free(extensions);
     free(blocks);
@@ -2180,7 +2351,6 @@ void _main(rf_header *header, void *contents)
     free(file_roots);
     free(revoked_files);
     free(revoke_buf);
-    saltysd_map *map = malloc(sizeof(saltysd_map));
     map->magic = SALTYSD_MAGIC;
     map->num_roots = num_roots;
     map->root_of = root_table;
