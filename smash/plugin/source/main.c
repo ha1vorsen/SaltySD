@@ -128,13 +128,15 @@ void plugin_main(void)
     }
 
     if (check_all()) {
+        saltysd_status.home_result = saltysd_home_swap_start();
+        if (saltysd_status.home_result < 0) {
+            saltysd_status.refused = 1;
+            return;
+        }
+
         saltysd_status.applied = apply_all();
         saltysd_status.stage = 2;
-        saltysd_status.home_result = saltysd_home_swap_start();
-        if (saltysd_status.home_result < 0)
-            saltysd_status.refused = 1;
-        else
-            plugins_load(saltysd_patches, NUM_PATCHES, SALTYSD_CODE_END);
+        plugins_load(saltysd_patches, NUM_PATCHES, SALTYSD_CODE_END);
     } else {
         saltysd_status.refused = 1;
         if (!undone)

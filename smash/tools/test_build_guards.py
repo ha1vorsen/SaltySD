@@ -4,6 +4,7 @@ import struct
 import unittest
 
 from arm_stack import bytes_reader, verify_routine
+from gen_se_registry import target_build_ids
 from verify_fighter_data_fallback import verify_dispatch
 from verify_menu_hook import MENU_FUNCTION, TRAMPOLINE, verify_hook
 
@@ -20,6 +21,18 @@ class ArmStackTests(unittest.TestCase):
     def test_four_byte_call_misalignment_fails(self):
         with self.assertRaisesRegex(ValueError, "sp alignment 4"):
             self.verify((0xE92D4000, 0xEB000000, 0xE8BD8000))
+
+
+class RegistryBuildTests(unittest.TestCase):
+    def test_one_target_can_name_multiple_verified_builds(self):
+        self.assertEqual(target_build_ids({"builds": [1, 2, 3]}, 0), [1, 2, 3])
+
+    def test_legacy_single_build_form_still_works(self):
+        self.assertEqual(target_build_ids({"build": 1}, 0), [1])
+
+    def test_ambiguous_build_forms_fail(self):
+        with self.assertRaisesRegex(SystemExit, "exactly one"):
+            target_build_ids({"build": 1, "builds": [1]}, 0)
 
 
 class MenuHookTests(unittest.TestCase):
