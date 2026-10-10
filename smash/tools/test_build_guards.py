@@ -2,11 +2,15 @@
 
 import struct
 import unittest
+from pathlib import Path
 
 from arm_stack import bytes_reader, verify_routine
 from gen_se_registry import target_build_ids
 from verify_fighter_data_fallback import verify_dispatch
 from verify_menu_hook import MENU_FUNCTION, TRAMPOLINE, verify_hook
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class ArmStackTests(unittest.TestCase):
@@ -78,6 +82,19 @@ class MenuHookTests(unittest.TestCase):
         patched[self.TARGET - self.BASE] ^= 1
         with self.assertRaisesRegex(ValueError, "not intact"):
             verify_hook(pristine, patched, self.SITE, self.TARGET, self.BASE)
+
+
+class TetraResponsivenessTests(unittest.TestCase):
+    def test_menu_entry_does_not_run_update_gate(self):
+        source = (ROOT / "plugin/source/tetra_menu.c").read_text()
+        entry = source[source.index("void tetra_menu_run(void)"):]
+        self.assertNotIn("update_gate", entry)
+        self.assertNotIn("run_gate", entry)
+
+    def test_pending_receive_has_a_deadline_and_yields(self):
+        source = (ROOT / "plugin/source/net.c").read_text()
+        self.assertIn("return fail(out, NET_TIMEOUT, RECEIVE_PENDING);", source)
+        self.assertIn("saltysd_svc_sleep(RECEIVE_POLL_NS);", source)
 
 
 class FighterDataFallbackTests(unittest.TestCase):

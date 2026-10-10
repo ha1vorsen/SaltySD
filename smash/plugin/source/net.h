@@ -10,6 +10,7 @@ enum {
     NET_STATUS,
     NET_TOO_BIG,
     NET_RECEIVE,
+    NET_TIMEOUT,
     NET_ABORTED,
 };
 
