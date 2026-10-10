@@ -7,6 +7,10 @@
 #define HTTP_OK          200
 #define RECEIVE_PENDING  ((int)0xD840A02B)
 #define RECEIVE_CHUNK    0x1000
+#define RECEIVE_POLL_NS  1000000ull
+#define RECEIVE_STALL_MS 5000
+
+extern void saltysd_svc_sleep(u64 ns);
 
 static const char user_agent_name[] = "User-Agent";
 static const char user_agent[] = "SaltySD";
@@ -96,6 +100,7 @@ static int request(net_result *out, u32 *session, u32 context, net_sink sink, vo
         return fail(out, NET_TOO_BIG, 0);
 
     u32 got = 0;
+    u32 stalled = 0;
     for (;;) {
         cmd = ipc_cmdbuf();
         cmd[0] = 0x000B0082;
@@ -117,6 +122,13 @@ static int request(net_result *out, u32 *session, u32 context, net_sink sink, vo
             return fail(out, NET_TOO_BIG, 0);
         if (total > got && !sink(ctx, chunk_buf, total - got))
             return fail(out, NET_ABORTED, 0);
+        if (total > got) {
+            stalled = 0;
+        } else if (more) {
+            if (++stalled >= RECEIVE_STALL_MS)
+                return fail(out, NET_TIMEOUT, RECEIVE_PENDING);
+            saltysd_svc_sleep(RECEIVE_POLL_NS);
+        }
         got = total;
         if (!more)
             break;

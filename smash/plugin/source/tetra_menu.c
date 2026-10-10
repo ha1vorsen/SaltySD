@@ -456,7 +456,7 @@ static void apply_mods(menu *m)
 }
 
 static const char *const net_stage_names[] = {
-    "ok", "no Wi-Fi", "http:C", "context", "request", "status", "too big", "receive", "aborted",
+    "ok", "no Wi-Fi", "http:C", "context", "request", "status", "too big", "receive", "timeout", "aborted",
 };
 
 static void put_net_stage(text_buffer *line_text, const net_result *net)
@@ -596,26 +596,6 @@ static void install_update(menu *m)
     }
     set_status(m, status_buf, status2_buf);
 }
-
-#if SALTYSD_IS_DIRTY
-static void run_gate(menu *m)
-{
-    if (update_gate(&last_check) != GATE_EXPIRED)
-        return;
-    saltysd_status.gate_expired++;
-
-    set_status(m, "Dirty access expired. Installing stable...", 0);
-    m->view = VIEW_BUSY;
-    draw(m);
-    update_check_run(&last_check, CHANNEL_STABLE, 0);
-    m->view = VIEW_MAIN;
-    if (last_check.outcome != UPDATE_AVAILABLE) {
-        set_status(m, "Dirty access expired; stable not reachable", 0);
-        return;
-    }
-    install_update(m);
-}
-#endif
 
 static void move_mod_cursor(menu *m, int down)
 {
@@ -931,10 +911,6 @@ void tetra_menu_run(void)
             (m.output.has_top ? top.layout.format : 0xFF) << 8 |
             (m.output.has_bottom ? bottom.layout.format : 0xFF);
     }
-
-#if SALTYSD_IS_DIRTY
-    run_gate(&m);
-#endif
 
     u32 reason = run_loop(&m);
     fs_close();
