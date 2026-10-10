@@ -30,5 +30,6 @@ unsigned int toggles_changes(const toggle_list *list);
 void toggles_apply(toggle_list *list, toggles_apply_result *out);
 unsigned int toggles_folder_path(const toggle_list *list, const toggle_entry *entry,
                                  unsigned short *out, unsigned int max);
+unsigned int toggles_entry_name_ascii(const toggle_entry *entry, char *out, unsigned int max);
 
 #endif

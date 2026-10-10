@@ -32,6 +32,19 @@ u32 toggles_folder_path(const toggle_list *list, const toggle_entry *entry, u16 
     return append(out, max, at, entry->name);
 }
 
+u32 toggles_entry_name_ascii(const toggle_entry *entry, char *out, u32 max)
+{
+    if (!max)
+        return 0;
+    u32 at = 0;
+    while (entry->name[at] && at < max - 1) {
+        u16 c = entry->name[at];
+        out[at++] = c >= 0x20 && c < 0x7F ? (char)c : '?';
+    }
+    out[at] = 0;
+    return at;
+}
+
 static void marker_path(const toggle_list *list, const toggle_entry *entry)
 {
     u32 at = toggles_folder_path(list, entry, path, PATH_CHARS);

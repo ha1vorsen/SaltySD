@@ -978,13 +978,15 @@ static void make_legacy_id(char out[SE_PACKAGE_ID_CHARS], u32 index)
 static u16 add_fallback_package(u32 index, int enabled)
 {
     char id[SE_PACKAGE_ID_CHARS];
+    char display_name[SE_DISPLAY_NAME_CHARS];
     make_legacy_id(id, index);
+    toggles_entry_name_ascii(&plugins.entries[index], display_name, sizeof(display_name));
     se_version version = { 1, 1, 0 };
     int added = se_plan_add_package(&boot_plan, id, version, (u16)index, enabled);
     if (added < 0)
         return SE_PLAN_NONE;
     boot_packages[index].plan_index = (u16)added;
-    se_diagnostics_package((u16)added, id, id,
+    se_diagnostics_package((u16)added, id, display_name[0] ? display_name : id,
                            enabled ? SE_PACKAGE_DISCOVERED : SE_PACKAGE_DISABLED);
     return (u16)added;
 }
