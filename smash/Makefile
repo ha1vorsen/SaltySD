@@ -10,16 +10,30 @@ include $(DEVKITARM)/ds_rules
 export LD	:=	$(CC)
 ARMIPS ?= armips
 
-TITLE_IDS ?= 000EDF00
 CODE ?= code.bin
+
+REQUESTED_GOALS := $(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)
+NON_BUILD_GOALS := clean test-guards test-host
+ifneq ($(filter-out $(NON_BUILD_GOALS),$(REQUESTED_GOALS)),)
+CODE_PATH := $(shell python -c "import os, sys; print(os.path.abspath(sys.argv[1]).replace(os.sep, '/'))" "$(CODE)")
+ifneq ($(origin TITLE_IDS),command line)
+DETECTED_BUILD := $(shell python tools/detect_build.py --registry plugin/targets/smash-1.1.7.toml --code "$(CODE)" || echo BUILD_DETECTION_FAILED)
+ifeq ($(lastword $(DETECTED_BUILD)),BUILD_DETECTION_FAILED)
+$(error CODE must be a clean USA, EUR, or JPN Smash 1.1.7 executable: $(CODE))
+endif
+TITLE_IDS := $(firstword $(DETECTED_BUILD))
+LEGACY ?= $(foreach id,$(DETECTED_BUILD),$(id) "$(CODE_PATH)")
+export LEGACY
+endif
 
 ifneq ($(words $(TITLE_IDS)),1)
 $(error Build one resident 3GX per verified title ID; TITLE_IDS must contain exactly one value)
 endif
+endif
 BUILD := build
 PAYLOADS := $(BUILD)/bin
 
-.PHONY: assemble all clean test-guards test-host test-sdk
+.PHONY: assemble all clean test-guards test-host
 
 all: require-code
 	@mkdir -p $(PAYLOADS)
@@ -48,7 +62,7 @@ all: require-code
 	@python tools/verify_fighter_data_fallback.py "$(CODE)" $(BUILD)/code_saltysd.bin $(BUILD)/common.armips.asm $(PAYLOADS)/cro_redir.sym
 	@python tools/verify_menu_hook.py "$(CODE)" $(BUILD)/code_saltysd.bin $(BUILD)/common.armips.asm
 	@python tools/check_island.py "$(CODE)" $(BUILD)/code_saltysd.bin
-	@$(MAKE) --no-print-directory -C plugin TITLE_IDS="$(TITLE_IDS)" CODEBIN="$(abspath $(CODE))" PATCHED="$(abspath $(BUILD)/code_saltysd.bin)"
+	@$(MAKE) --no-print-directory -C plugin TITLE_IDS="$(TITLE_IDS)" CODEBIN="$(CODE_PATH)" PATCHED="$(abspath $(BUILD)/code_saltysd.bin)"
 
 .PHONY: require-code
 require-code:
@@ -65,13 +79,10 @@ test-host:
 	@$(BUILD)/test_se_errors.exe
 	@gcc -std=c11 -Wall -Wextra -Werror -Iplugin/source tests/test_se_plan.c plugin/source/se/plan.c plugin/source/se/errors.c -o $(BUILD)/test_se_plan.exe
 	@$(BUILD)/test_se_plan.exe
-	@gcc -std=c11 -Wall -Wextra -Werror -Iplugin/source -Isdk/include tests/test_se_format.c plugin/source/se/format.c plugin/source/se/errors.c -o $(BUILD)/test_se_format.exe
+	@gcc -std=c11 -Wall -Wextra -Werror -Iplugin/source tests/test_se_format.c plugin/source/se/format.c plugin/source/se/errors.c -o $(BUILD)/test_se_format.exe
 	@$(BUILD)/test_se_format.exe
-	@gcc -std=c11 -Wall -Wextra -Werror -Iplugin/source -Isdk/include tests/test_se_hooks.c plugin/source/se/hooks.c plugin/source/se/targets.c plugin/source/se/errors.c -Ibuild/plugin -o $(BUILD)/test_se_hooks.exe
+	@gcc -std=c11 -Wall -Wextra -Werror -Iplugin/source tests/test_se_hooks.c plugin/source/se/hooks.c plugin/source/se/targets.c plugin/source/se/errors.c -Ibuild/plugin -o $(BUILD)/test_se_hooks.exe
 	@$(BUILD)/test_se_hooks.exe
-
-test-sdk:
-	@python -m unittest discover -s sdk/tests -t sdk -p 'test_*.py'
 
 clean:
 	@rm -rf $(PAYLOADS) $(BUILD)/code_saltysd.bin $(BUILD)/common.asm $(BUILD)/common.armips.asm $(BUILD)/common.h

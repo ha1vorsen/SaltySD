@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import struct
+import tomllib
 import unittest
 from pathlib import Path
 
 from arm_stack import bytes_reader, verify_routine
+from detect_build import select_build
 from gen_se_registry import target_build_ids
 from verify_fighter_data_fallback import verify_dispatch
 from verify_menu_hook import MENU_FUNCTION, TRAMPOLINE, verify_hook
@@ -37,6 +39,23 @@ class RegistryBuildTests(unittest.TestCase):
     def test_ambiguous_build_forms_fail(self):
         with self.assertRaisesRegex(SystemExit, "exactly one"):
             target_build_ids({"build": 1, "builds": [1]}, 0)
+
+    def test_each_registered_build_selects_its_title_and_legacy_variants(self):
+        registry = tomllib.loads(
+            (ROOT / "plugin/targets/smash-1.1.7.toml").read_text(encoding="utf-8"))
+        expected = {
+            "usa": (0x000EDF00, [0x000EDF00]),
+            "eur": (0x000EE000, [0x000EE000, 0x000B8B00]),
+            "jpn": (0x000B8B00, [0x000B8B00, 0x000EE000]),
+        }
+        for build in registry["builds"]:
+            self.assertEqual(
+                select_build(registry, build["code_sha256"]),
+                expected[build["region"]])
+
+    def test_unknown_executable_fails_detection(self):
+        with self.assertRaisesRegex(SystemExit, "selected 0 builds"):
+            select_build({"builds": []}, "00" * 32)
 
 
 class MenuHookTests(unittest.TestCase):
@@ -95,6 +114,13 @@ class TetraResponsivenessTests(unittest.TestCase):
         source = (ROOT / "plugin/source/net.c").read_text()
         self.assertIn("return fail(out, NET_TIMEOUT, RECEIVE_PENDING);", source)
         self.assertIn("saltysd_svc_sleep(RECEIVE_POLL_NS);", source)
+
+
+class LegacySeaTests(unittest.TestCase):
+    def test_fallback_package_uses_folder_name_for_display(self):
+        source = (ROOT / "plugin/source/plugins.c").read_text()
+        self.assertIn("toggles_entry_name_ascii(&plugins.entries[index]", source)
+        self.assertIn("id, display_name[0] ? display_name : id", source)
 
 
 class FighterDataFallbackTests(unittest.TestCase):

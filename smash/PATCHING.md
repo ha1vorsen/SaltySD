@@ -10,9 +10,9 @@ It also keeps the payloads out of the game's binary. They used to be written ove
 
 **Patching Instructions**
 
- * Download or clone the source, then use a code.bin of your version of Smash and place it at `/smash/code.bin`, alongside the Makefile. Git metadata is not required to build SaltySD v2.
+ * Download or clone the source, then place a clean, decompressed USA, EUR, or JPN Smash 1.1.7 `code.bin` alongside the Makefile.
  * Grab the latest armips from [here](https://buildbot.orphis.net/armips/) and make sure your terminal can call it (i.e. add it to PATH).
- * Build with the Makefile provided, supplying the title ID for your game build: `make TITLE_IDS=<title-id>`. The code.bin is scanned and patched to `build/code_saltysd.bin`. `build/plugin/saltysd.3gx` is built afterwards.
+ * Run `make`. The build identifies the region from `code.bin`, patches it as `build/code_saltysd.bin`, and writes `build/plugin/saltysd.3gx` for that region.
  * Install the plugin at `sd:/luma/plugins/<full title ID>/saltysd.3gx`, ie `sd:/luma/plugins/00040000000EDF00/saltysd.3gx`, and enable the plugin loader in Rosalina.
  * Remove any older SaltySD `code.ips` or `code.bin`. If the game is already patched by one, you will have issues. SaltySD v2 breaks other IPS mods, like the older high quality model IPS. 
 

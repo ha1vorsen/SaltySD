@@ -28,12 +28,15 @@ endif
 CODEBIN  ?= $(CURDIR)/../code.bin
 PATCHED  ?= $(CURDIR)/../build/code_saltysd.bin
 LEGACY   ?= $(firstword $(TITLE_IDS)) "$(CODEBIN)"
+empty :=
+space := $(empty) $(empty)
+CODEBIN_DEP := $(subst $(space),\$(space),$(CODEBIN))
 
 ARCH    := -marm -march=armv6k -mtune=mpcore -mfloat-abi=hard
 # -O2 is what resource_mod has always been built with.
 CFLAGS  := $(ARCH) -std=gnu11 -O2 -Wall -fomit-frame-pointer -ffunction-sections \
            -fdata-sections -fno-builtin -ffreestanding -fno-strict-aliasing -I$(BUILD) -I../build -I.. -Isource \
-           -Isource/monocypher -I../sdk/include
+           -Isource/monocypher
 ASFLAGS := $(ARCH) -x assembler-with-cpp -I../build -Wa,-I,.. -Wa,-I,../build
 CFLAGS  += -DSALTYSD_TITLE_ID=0x$(firstword $(TITLE_IDS))
 ifeq ($(UPDATE_TEST),1)
@@ -84,12 +87,12 @@ $(BUILD)/input-identity.txt: FORCE ../tools/write_input_identity.py | $(BUILD)
 $(BUILD)/build-config.txt: FORCE ../tools/write_text_if_changed.py | $(BUILD)
 	@python ../tools/write_text_if_changed.py $@ "TITLE_IDS=$(TITLE_IDS)" "IDENTITY=$(IDENTITY)" "IDENTITY_DEFINE=$(IDENTITY_DEFINE)" "BUILT_AT=$(BUILT_AT)"
 
-$(BUILD)/se_targets.generated.h: $(BUILD)/input-identity.txt $(BUILD)/build-config.txt ../sdk/targets/smash-1.1.7.toml ../tools/gen_se_registry.py | $(BUILD)
-	@python ../tools/gen_se_registry.py --registry ../sdk/targets/smash-1.1.7.toml --title-id 0x$(firstword $(TITLE_IDS)) --code "$(CODEBIN)" --out $@
+$(BUILD)/se_targets.generated.h: $(BUILD)/input-identity.txt $(BUILD)/build-config.txt targets/smash-1.1.7.toml ../tools/gen_se_registry.py | $(BUILD)
+	@python ../tools/gen_se_registry.py --registry targets/smash-1.1.7.toml --title-id 0x$(firstword $(TITLE_IDS)) --code "$(CODEBIN)" --out $@
 
 $(BUILD)/se/targets.o: $(BUILD)/se_targets.generated.h
 
-$(BUILD)/patches.h: $(BUILD)/input-identity.txt $(CODEBIN) $(PATCHED) ../tools/gen_patches.py | $(BUILD)
+$(BUILD)/patches.h: $(BUILD)/input-identity.txt $(CODEBIN_DEP) $(PATCHED) ../tools/gen_patches.py | $(BUILD)
 	@test -f "$(CODEBIN)" -a -f "$(PATCHED)" || { \
 	  echo ""; \
 	  echo "  error: need both the pristine and the patched binary:"; \
@@ -103,7 +106,7 @@ $(BUILD)/patches.h: $(BUILD)/input-identity.txt $(CODEBIN) $(PATCHED) ../tools/g
 
 $(OFILES): | patches $(BUILD)
 
-$(BUILD)/legacy.h: $(BUILD)/input-identity.txt $(BUILD)/build-config.txt $(CODEBIN) ../tools/gen_legacy.py $(wildcard ../legacy/*.ips) | $(BUILD)
+$(BUILD)/legacy.h: $(BUILD)/input-identity.txt $(BUILD)/build-config.txt $(CODEBIN_DEP) ../tools/gen_legacy.py $(wildcard ../legacy/*.ips) | $(BUILD)
 	@python ../tools/gen_legacy.py ../legacy $@ $(LEGACY)
 
 $(BUILD)/main.o: $(BUILD)/patches.h $(BUILD)/legacy.h

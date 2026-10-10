@@ -4,17 +4,7 @@ import argparse
 import hashlib
 from pathlib import Path
 import re
-import sys
 import tomllib
-
-
-ROOT = Path(__file__).resolve().parents[1]
-LOCAL_DEPS = ROOT / "sdk" / ".deps"
-if LOCAL_DEPS.is_dir():
-    sys.path.insert(0, str(LOCAL_DEPS))
-sys.path.insert(0, str(ROOT / "sdk"))
-
-from se_sdk.arm import ArmDecodeError, disassemble
 
 
 BASE = 0x100000
@@ -155,12 +145,6 @@ def main():
             raise SystemExit(f"target {name} is outside code.bin")
         if image[offset:offset + len(expected)] != expected:
             raise SystemExit(f"target {name} expected bytes differ at 0x{address:08X}")
-        mode = target.get("mode")
-        if mode in ("arm", "thumb"):
-            try:
-                disassemble(expected, address, mode)
-            except ArmDecodeError as exc:
-                raise SystemExit(f"target {name} has invalid {mode} expected bytes: {exc}") from exc
         matches = aligned_matches(image, signature, mask)
         if matches != [address]:
             raise SystemExit(f"target {name} signature resolves at " +
