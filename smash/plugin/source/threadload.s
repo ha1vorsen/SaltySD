@@ -33,7 +33,7 @@ saltysd_threadload:
         ldr r0, [r0, #0x8]
         tst r0, #0x8000 @ does this file have an SD override?
      pop {r0-r6,lr}
-     bne exit
+     bne saltysd_threadload_exit
      
      push {r0-r8,lr}
          sub sp, sp, #0x20
@@ -98,7 +98,7 @@ end_read_sd:
          add sp, sp, #0x20
      pop  {r0-r8,lr}
      
-     b skip
+     b saltysd_threadload_skip
      
 close_and_end:
         mov r0, r8
@@ -109,13 +109,16 @@ close:
      add sp, sp, #0x20
      pop  {r0-r8,lr}
      
-exit:
+.global saltysd_threadload_exit
+saltysd_threadload_exit:
+     mov r12, #0x0
      add lr, lr, #0x4
      bx lr
      
-skip:
-    add sp, sp, #0x8
-    pop {r4-r8,lr}
+.global saltysd_threadload_skip
+saltysd_threadload_skip:
+    mov r12, #0x1
+    add lr, lr, #0x4
     
 skip_end:
     bx lr

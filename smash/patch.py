@@ -47,11 +47,12 @@ bgm_tail_offs = 0x8C
 
 # Code the hooks reach with a bl or a b lives in the dead per-fighter stub array.
 ISLAND_OFFS = 0x3C4
-ISLAND_SIZE = 0x400
+ISLAND_SIZE = 0x500
 ISLAND_SDBGM = 0x1E0
 ISLAND_HOOKS = 0x220
 ISLAND_HOME = 0x360
-ISLAND_HOME_GATE = 0x3FC
+ISLAND_HOME_THREAD = 0x400
+ISLAND_HOME_GATE = 0x4FC
 BASE = 0x100000
 
 def armips_value(name):
@@ -75,10 +76,10 @@ rf_alloc = readbytes("build/bin/incalloc.bin")
 rf_hook = readbytes("build/bin/hookresource.bin")
 #ls_alloc = readbytes("build/bin/inclsalloc.bin")
 #ls_hook = readbytes("build/bin/hookls.bin")
-thread_hook = readbytes("build/bin/hookthread.bin")
 norm_hook = readbytes("build/bin/hooknorm.bin")
 sdbgm = readbytes("build/bin/island_sdbgm.bin")
 home = readbytes("build/bin/island_home.bin")
+home_thread = readbytes("build/bin/island_home_thread.bin")
 
 bgm_str_addr = f.find(bgm_sig)
 bgm_hook_addr = bgm_str_addr + bgm_hook_offs
@@ -97,12 +98,15 @@ if menu_hook_word != 0xE5902040:
 sdbgm_addr = island_base() + ISLAND_SDBGM
 menu_tramp_addr = island_base() + ISLAND_HOOKS + 0xC
 home_addr = island_base() + ISLAND_HOME
+home_thread_addr = island_base() + ISLAND_HOME_THREAD
 home_gate_addr = island_base() + ISLAND_HOME_GATE
 
 if ISLAND_SDBGM + len(sdbgm) > ISLAND_HOOKS:
     raise RuntimeError("The BGM payload does not fit in the island.")
-if ISLAND_HOME + len(home) > ISLAND_HOME_GATE:
+if ISLAND_HOME + len(home) > ISLAND_HOME_THREAD:
     raise RuntimeError("The HOME relay does not fit in the island.")
+if ISLAND_HOME_THREAD + len(home_thread) > ISLAND_HOME_GATE:
+    raise RuntimeError("The HOME thread relay does not fit in the island.")
 
 def replace_word(blob, marker, value, label, count=1):
     needle = struct.pack('<I', marker)
@@ -113,6 +117,8 @@ def replace_word(blob, marker, value, label, count=1):
 home = replace_word(home, 0x11111111, home_gate_addr + BASE, "gate")
 home = replace_word(home, 0x22222222, norm_hook_addr + BASE + 0xC, "normal continuation")
 home = replace_word(home, 0x33333333, norm_hook_addr + BASE + 0x1C, "normal skip continuation")
+home_thread = replace_word(home_thread, 0x11111111, home_gate_addr + BASE, "gate")
+home_thread = replace_word(home_thread, 0x44444444, thread_hook_addr + BASE + 0xC, "thread continuation")
 
 # Just convert f to bytes now that we're done searching things.
 try:
@@ -125,7 +131,7 @@ f = insertreplace(f,rf_hook,rf_hook_addr)
 f = insertreplace(f,rf_alloc,rf_alloc_addr)
 #f = insertreplace(f,ls_hook,ls_hook_addr)
 #f = insertreplace(f,ls_alloc,ls_alloc_addr)
-f = insertreplace(f,thread_hook,thread_hook_addr)
+f = insertreplace(f,arm_b(thread_hook_addr, home_thread_addr),thread_hook_addr)
 f = insertreplace(f,arm_b(norm_hook_addr, home_addr),norm_hook_addr)
 
 f = insertreplace(f, arm_b(menu_hook_site_addr, menu_tramp_addr),
@@ -140,6 +146,7 @@ f = insertreplace(f,b2str([0xEA]),norm_hook_addr-0x58+3)
 
 f = insertreplace(f,sdbgm,sdbgm_addr)
 f = insertreplace(f,home,home_addr)
+f = insertreplace(f,home_thread,home_thread_addr)
 f = insertreplace(f,struct.pack('<I', 0),home_gate_addr)
 
 def words_match(addr, words):

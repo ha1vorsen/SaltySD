@@ -81,6 +81,20 @@ def main():
             raise SystemExit(str(error))
         total_calls += calls
 
+    expected = {
+        "saltysd_threadload_exit": (0xE3A0C000, 0xE28EE004, 0xE12FFF1E),
+        "saltysd_threadload_skip": (0xE3A0C001, 0xE28EE004, 0xE12FFF1E),
+    }
+    for name, words in expected.items():
+        if name not in symbols:
+            raise SystemExit(f"plugin ELF has no {name} symbol")
+        start, _size, section_index = symbols[name]
+        section = sections[section_index]
+        offset = section["off"] + start - section["addr"]
+        actual = struct.unpack_from("<III", data, offset)
+        if actual != words:
+            raise SystemExit(f"{name} does not return through the HOME thread relay")
+
     print(f"plugin ARM ABI ok: {len(ROUTINES)} routines, {total_calls} reachable calls")
 
 

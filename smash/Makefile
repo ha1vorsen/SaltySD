@@ -56,6 +56,9 @@ all: require-code
 	@$(AS) "island_home.s"
 	@$(OBJCOPY) -O binary a.out "$(PAYLOADS)/island_home.bin"
 	@rm a.out
+	@$(AS) "island_home_thread.s"
+	@$(OBJCOPY) -O binary a.out "$(PAYLOADS)/island_home_thread.bin"
+	@rm a.out
 	@python patch.py "$(CODE)"
 	@$(ARMIPS) -sym2 $(PAYLOADS)/cro_redir.sym cro_redir.asm
 	@python tools/verify_cro_abi.py $(BUILD)/code_saltysd.bin $(PAYLOADS)/cro_redir.sym
