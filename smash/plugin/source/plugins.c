@@ -578,7 +578,7 @@ static int apply_host_imports(const u8 *f, u32 len, const elf_header *elf, u32 v
             return PLUGIN_BAD_FIXUP;
         u32 address;
         if (import->symbol_id == SE_HOST_IMPORT_GET_HOST)
-            address = (u32)se_get_host;
+            address = saltysd_se_get_host_ADDR;
         else
             return PLUGIN_BAD_FIXUP;
         if (import->kind == SE_IMPORT_ABS32) {

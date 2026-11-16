@@ -28,7 +28,7 @@ saltysd_menu_hook:
 
 menu_replay:
     ldr     r2, [r0, #0x40]
-    ldr     r12, =(menu_hook_site_ADDR + 0x4)
+    ldr     r12, =saltysd_menu_exit_ADDR
     bx      r12
 
 .pool

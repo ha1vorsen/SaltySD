@@ -7,7 +7,8 @@
 #define PLG_OK             0
 #define PLG_ABOUT_TO_SWAP  3
 #define PLG_GATE_LOCK      0x80000000u
-#define PLG_GATE_ACTIVE    0x7fffffffu
+#define PLG_GATE_OFF       0x40000000u
+#define PLG_GATE_ACTIVE    0x3fffffffu
 #define THREADVARS_MAGIC   0x21545624u
 #define HOME_START_INVALID ((int)0xE0000003)
 #define HOME_START_TIMEOUT ((int)0xE0000004)
@@ -89,6 +90,12 @@ static void gate_unlock(void)
     *home_gate() = 0;
 }
 
+static int gate_off(int result)
+{
+    *home_gate() = PLG_GATE_LOCK | PLG_GATE_OFF;
+    return result;
+}
+
 static int plgldr_arbiter(u32 *out)
 {
     u32 port;
@@ -156,15 +163,15 @@ int saltysd_home_swap_start(void)
                                            (u32 *)(home_stack + sizeof(home_stack)),
                                            0x3f, -1);
     if (result < 0)
-        return result;
+        return gate_off(result);
 
     ipc_close(thread);
     for (u32 waited = 0; !home_start_ready && waited < HOME_START_WAIT_MS; waited++)
         saltysd_svc_sleep(1000000);
     if (!home_start_ready)
-        return HOME_START_TIMEOUT;
+        return gate_off(HOME_START_TIMEOUT);
     if (home_start_result < 0)
-        return home_start_result;
+        return gate_off(home_start_result);
 
     *home_gate() = 0;
     return 0;

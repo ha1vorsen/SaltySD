@@ -38,14 +38,8 @@ PAYLOADS := $(BUILD)/bin
 all: require-code
 	@mkdir -p $(PAYLOADS)
 	@python scan.py "$(CODE)"
-	@$(AS) "resource_mod/hookresource.asm"
-	@$(OBJCOPY) -O binary a.out "$(PAYLOADS)/hookresource.bin"
-	@rm a.out
 	@$(AS) "resource_mod/incalloc.asm"
 	@$(OBJCOPY) -O binary a.out "$(PAYLOADS)/incalloc.bin"
-	@rm a.out
-	@$(AS) "hookthread.asm"
-	@$(OBJCOPY) -O binary a.out "$(PAYLOADS)/hookthread.bin"
 	@rm a.out
 	@$(AS) "hooknorm.asm"
 	@$(OBJCOPY) -O binary a.out "$(PAYLOADS)/hooknorm.bin"
@@ -58,6 +52,9 @@ all: require-code
 	@rm a.out
 	@$(AS) "island_home_thread.s"
 	@$(OBJCOPY) -O binary a.out "$(PAYLOADS)/island_home_thread.bin"
+	@rm a.out
+	@$(AS) "island_gate.s"
+	@$(OBJCOPY) -O binary a.out "$(PAYLOADS)/island_gate.bin"
 	@rm a.out
 	@python patch.py "$(CODE)"
 	@$(ARMIPS) -sym2 $(PAYLOADS)/cro_redir.sym cro_redir.asm

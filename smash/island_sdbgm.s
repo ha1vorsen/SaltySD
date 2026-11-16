@@ -1,7 +1,7 @@
 
 .arm
 
-.equ saltysd_build_named_path,  0x07000114
+.equ saltysd_build_named_path,  0x77777777
 .equ SALTYSD_KIND_BGM,          0x1
 .equ BGM_PATH_SIZE,             0x100
 

@@ -9,7 +9,7 @@ from arm_stack import bytes_reader, verify_routine
 from detect_build import select_build
 from gen_se_registry import target_build_ids
 from verify_fighter_data_fallback import verify_dispatch
-from verify_menu_hook import MENU_FUNCTION, TRAMPOLINE, verify_hook
+from verify_menu_hook import MENU_FUNCTION, trampoline, verify_hook
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +62,7 @@ class MenuHookTests(unittest.TestCase):
     BASE = 0x1000
     SITE = 0x1040
     TARGET = 0x1100
+    RELAY = 0x1180
 
     def images(self):
         pristine = bytearray(0x200)
@@ -72,35 +73,35 @@ class MenuHookTests(unittest.TestCase):
         displacement = (self.TARGET - (self.SITE + 8)) >> 2
         struct.pack_into("<I", patched, self.SITE - self.BASE,
                          0xEA000000 | (displacement & 0xFFFFFF))
-        patched[self.TARGET - self.BASE:self.TARGET - self.BASE + 8] = TRAMPOLINE
+        patched[self.TARGET - self.BASE:self.TARGET - self.BASE + 8] = trampoline(self.RELAY)
         return pristine, patched
 
     def test_exact_one_word_hook_passes(self):
-        verify_hook(*self.images(), self.SITE, self.TARGET, self.BASE)
+        verify_hook(*self.images(), self.SITE, self.TARGET, self.RELAY, self.BASE)
 
     def test_neighbor_write_fails(self):
         pristine, patched = self.images()
         patched[self.SITE - self.BASE + 4] ^= 1
         with self.assertRaisesRegex(ValueError, "outside its single"):
-            verify_hook(pristine, patched, self.SITE, self.TARGET, self.BASE)
+            verify_hook(pristine, patched, self.SITE, self.TARGET, self.RELAY, self.BASE)
 
     def test_wrong_target_fails(self):
         pristine, patched = self.images()
         struct.pack_into("<I", patched, self.SITE - self.BASE, 0xEA000000)
         with self.assertRaisesRegex(ValueError, "expected island trampoline"):
-            verify_hook(pristine, patched, self.SITE, self.TARGET, self.BASE)
+            verify_hook(pristine, patched, self.SITE, self.TARGET, self.RELAY, self.BASE)
 
     def test_wrong_displaced_instruction_fails(self):
         pristine, patched = self.images()
         struct.pack_into("<I", pristine, self.SITE - self.BASE, 0xE1A00000)
         with self.assertRaisesRegex(ValueError, "audited 1.1.7 function"):
-            verify_hook(pristine, patched, self.SITE, self.TARGET, self.BASE)
+            verify_hook(pristine, patched, self.SITE, self.TARGET, self.RELAY, self.BASE)
 
     def test_corrupt_trampoline_fails(self):
         pristine, patched = self.images()
         patched[self.TARGET - self.BASE] ^= 1
         with self.assertRaisesRegex(ValueError, "not intact"):
-            verify_hook(pristine, patched, self.SITE, self.TARGET, self.BASE)
+            verify_hook(pristine, patched, self.SITE, self.TARGET, self.RELAY, self.BASE)
 
 
 class TetraResponsivenessTests(unittest.TestCase):

@@ -47,12 +47,16 @@ bgm_tail_offs = 0x8C
 
 # Code the hooks reach with a bl or a b lives in the dead per-fighter stub array.
 ISLAND_OFFS = 0x3C4
-ISLAND_SIZE = 0x500
+ISLAND_SIZE = 0x800
 ISLAND_SDBGM = 0x1E0
 ISLAND_HOOKS = 0x220
 ISLAND_HOME = 0x360
 ISLAND_HOME_THREAD = 0x400
 ISLAND_HOME_GATE = 0x4FC
+ISLAND_GATED = 0x500
+GATED_SE_TABLE = 0x2C
+SE_HOST_HEADER_SIZE = 0x14
+SE_HOST_FUNCTIONS = 11
 BASE = 0x100000
 
 def armips_value(name):
@@ -73,13 +77,13 @@ except TypeError:
     f = open(sys.argv[1], 'rb').read()
 
 rf_alloc = readbytes("build/bin/incalloc.bin")
-rf_hook = readbytes("build/bin/hookresource.bin")
 #ls_alloc = readbytes("build/bin/inclsalloc.bin")
 #ls_hook = readbytes("build/bin/hookls.bin")
 norm_hook = readbytes("build/bin/hooknorm.bin")
 sdbgm = readbytes("build/bin/island_sdbgm.bin")
 home = readbytes("build/bin/island_home.bin")
 home_thread = readbytes("build/bin/island_home_thread.bin")
+gated = readbytes("build/bin/island_gate.bin")
 
 bgm_str_addr = f.find(bgm_sig)
 bgm_hook_addr = bgm_str_addr + bgm_hook_offs
@@ -100,6 +104,7 @@ menu_tramp_addr = island_base() + ISLAND_HOOKS + 0xC
 home_addr = island_base() + ISLAND_HOME
 home_thread_addr = island_base() + ISLAND_HOME_THREAD
 home_gate_addr = island_base() + ISLAND_HOME_GATE
+gated_addr = island_base() + ISLAND_GATED
 
 if ISLAND_SDBGM + len(sdbgm) > ISLAND_HOOKS:
     raise RuntimeError("The BGM payload does not fit in the island.")
@@ -107,6 +112,8 @@ if ISLAND_HOME + len(home) > ISLAND_HOME_THREAD:
     raise RuntimeError("The HOME relay does not fit in the island.")
 if ISLAND_HOME_THREAD + len(home_thread) > ISLAND_HOME_GATE:
     raise RuntimeError("The HOME thread relay does not fit in the island.")
+if ISLAND_GATED + len(gated) > ISLAND_SIZE:
+    raise RuntimeError("The gated relays do not fit in the island.")
 
 def replace_word(blob, marker, value, label, count=1):
     needle = struct.pack('<I', marker)
@@ -119,6 +126,20 @@ home = replace_word(home, 0x22222222, norm_hook_addr + BASE + 0xC, "normal conti
 home = replace_word(home, 0x33333333, norm_hook_addr + BASE + 0x1C, "normal skip continuation")
 home_thread = replace_word(home_thread, 0x11111111, home_gate_addr + BASE, "gate")
 home_thread = replace_word(home_thread, 0x44444444, thread_hook_addr + BASE + 0xC, "thread continuation")
+gated = replace_word(gated, 0x11111111, home_gate_addr + BASE, "gate", count=1)
+gated = replace_word(gated, 0x55555555, rf_hook_addr + BASE + 0xC, "rf continuation", count=1)
+gated = replace_word(gated, 0x56565656, rf_hook_addr + BASE + 0x24, "rf skip continuation", count=1)
+gated = replace_word(gated, 0x66666666, menu_hook_site_addr + BASE + 0x4, "menu continuation", count=1)
+sdbgm = replace_word(sdbgm, 0x77777777, gated_addr + BASE + 0x1C, "BGM path builder")
+
+gated = bytearray(gated)
+for i in range(SE_HOST_FUNCTIONS):
+    at = GATED_SE_TABLE + SE_HOST_HEADER_SIZE + i * 4
+    offset = struct.unpack_from('<I', gated, at)[0]
+    if offset >= len(gated):
+        raise RuntimeError("SE host veneer table has an unexpected entry")
+    struct.pack_into('<I', gated, at, gated_addr + BASE + offset)
+gated = bytes(gated)
 
 # Just convert f to bytes now that we're done searching things.
 try:
@@ -127,7 +148,7 @@ except:
     f = f
 
 w = open("build/code_saltysd.bin", 'w+b')
-f = insertreplace(f,rf_hook,rf_hook_addr)
+f = insertreplace(f,arm_b(rf_hook_addr, gated_addr + 0xC),rf_hook_addr)
 f = insertreplace(f,rf_alloc,rf_alloc_addr)
 #f = insertreplace(f,ls_hook,ls_hook_addr)
 #f = insertreplace(f,ls_alloc,ls_alloc_addr)
@@ -148,6 +169,7 @@ f = insertreplace(f,sdbgm,sdbgm_addr)
 f = insertreplace(f,home,home_addr)
 f = insertreplace(f,home_thread,home_thread_addr)
 f = insertreplace(f,struct.pack('<I', 0),home_gate_addr)
+f = insertreplace(f,gated,gated_addr)
 
 def words_match(addr, words):
     return all(r32(f, addr + i*4) == word for i, word in enumerate(words))

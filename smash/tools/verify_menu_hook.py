@@ -9,7 +9,11 @@ ISLAND_OFFS = 0x3C4
 ISLAND_HOOKS = 0x220
 MENU_TRAMP_OFFS = 0x0C
 DISPLACED = 0xE5902040
-TRAMPOLINE = struct.pack("<II", 0xE51FF004, 0x0700011C)
+MENU_RELAY_OFFS = 0x510
+
+
+def trampoline(relay):
+    return struct.pack("<II", 0xE51FF004, relay)
 MENU_FUNCTION = bytes((
     0x14, 0x10, 0xA0, 0xE3, 0x00, 0x00, 0xA0, 0xE1,
     0x40, 0x20, 0x90, 0xE5, 0x02, 0x11, 0x80, 0xE7,
@@ -35,7 +39,7 @@ def arm_branch_target(site, word):
     return site + 8 + displacement * 4
 
 
-def verify_hook(pristine, patched, site, target, base=BASE):
+def verify_hook(pristine, patched, site, target, relay, base=BASE):
     if len(pristine) != len(patched):
         raise ValueError("pristine and patched code.bin sizes differ")
     offset = site - base
@@ -67,7 +71,8 @@ def verify_hook(pristine, patched, site, target, base=BASE):
         raise ValueError("menu hook changed bytes outside its single displaced instruction")
 
     target_offset = target - base
-    if patched[target_offset:target_offset + len(TRAMPOLINE)] != TRAMPOLINE:
+    expected = trampoline(relay)
+    if patched[target_offset:target_offset + len(expected)] != expected:
         raise ValueError(f"menu trampoline is not intact at 0x{target:08X}")
 
 
@@ -81,14 +86,15 @@ def main():
     site = symbol(sys.argv[3], "menu_hook_site")
     island = symbol(sys.argv[3], "cro_fighter_new") + ISLAND_OFFS
     target = island + ISLAND_HOOKS + MENU_TRAMP_OFFS
+    relay = island + MENU_RELAY_OFFS
     try:
-        verify_hook(pristine, patched, site, target)
+        verify_hook(pristine, patched, site, target, relay)
     except ValueError as error:
         raise SystemExit(str(error))
 
     print(
         f"menu hook ok: one word at 0x{site:08X} -> 0x{target:08X}; "
-        "displaced ldr and plugin entry are fixed"
+        f"displaced ldr fixed; trampoline -> gated relay 0x{relay:08X}"
     )
 
 

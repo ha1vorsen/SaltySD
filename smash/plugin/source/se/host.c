@@ -276,7 +276,12 @@ static const se_host_v1 host = {
 
 const se_host_v1 *se_get_host(se_u32 requested_major)
 {
-    return requested_major == SE_HOST_ABI_MAJOR ? &host : 0;
+    if (requested_major != SE_HOST_ABI_MAJOR)
+        return 0;
+    se_host_v1 *resident = (se_host_v1 *)saltysd_se_host_ADDR;
+    resident->header = host.header;
+    *(volatile u32 *)saltysd_se_host_real_ADDR = (u32)&host;
+    return resident;
 }
 
 void se_host_reset(void)

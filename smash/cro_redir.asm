@@ -21,10 +21,11 @@ CRO_CODE_START equ (0xB0)
 CRO_NAMED_EXPORT_PTR equ (0xD0)
 CRO_NAMED_EXPORT_NUM equ (0xD4)
 
-; Slot 5 of the plugin's entry table answers which mod folder supplies a file.
-saltysd_build_named_path equ (0x07000114)
-
 saltysd_island equ (cro_fighter_new+0x3C4)
+saltysd_gated equ (saltysd_island+0x500)
+saltysd_gated_menu_relay equ (saltysd_gated+0x10)
+saltysd_named_path_wait equ (saltysd_gated+0x20)
+saltysd_gated_cro_mapped equ (saltysd_gated+0x24)
 SALTYSD_KIND_CRO equ (0x0)
 
 ; Expand the CRO load object to 8 from 4
@@ -924,7 +925,7 @@ cro_file_size_intercept:
       mov r1, #0x300
       mov r2, #SALTYSD_KIND_CRO
       ldr r3, [sp, #CRO_PATH]
-      ldr r12, =saltysd_build_named_path
+      ldr r12, =saltysd_named_path_wait
       blx r12
       cmp r0, #0x0
       beq size_close_and_end
@@ -1005,7 +1006,7 @@ cro_file_intercept:
       mov r1, #0x300
       mov r2, #SALTYSD_KIND_CRO
       ldr r3, [sp, #CRO_PATH]
-      ldr r12, =saltysd_build_named_path
+      ldr r12, =saltysd_named_path_wait
       blx r12
       cmp r0, #0x0
       beq close_and_end
@@ -1105,7 +1106,7 @@ saltysd_cro_post:
 .org saltysd_island+0x22C
 saltysd_menu_tramp:
    .word 0xE51FF004
-   .word 0x0700011C
+   .word saltysd_gated_menu_relay
 
 saltysd_cro_post_body:
    push {r4, lr}
@@ -1202,14 +1203,9 @@ cro_minigame_load_checked_done:
    pop {r4, pc}
 cro_minigame_load_checked_end:
 
-; Runs in the CRO worker once LoadCRO_New has mapped and fixed a module,
-; before the game first calls into it, so the plugin sees every loaded
-; CRO exactly once. r0 holds the mapped base and must survive the call.
+; Reports each newly mapped CRO to the plugin. r0 is its base.
 saltysd_cro_mapped:
-   push {r0-r3, r12, lr}
-   ldr r12, =0x07000118
-   blx r12
-   pop {r0-r3, r12, pc}
+   b saltysd_gated_cro_mapped
 saltysd_cro_mapped_end:
 
 .pool
